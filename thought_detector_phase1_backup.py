@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 """
 Complete thought detection module using LiteLLM and Pydantic
-Phase 2: Parallel Processing Implementation
 """
 
 import os
 import threading
 import queue
 import time
-from typing import Optional, List, Tuple, Dict
+from typing import Optional, List, Tuple
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, Future
 from pydantic import BaseModel, Field
 import litellm
 from litellm import completion
@@ -41,42 +39,61 @@ class ThoughtAnalysis(BaseModel):
     )
 
 class ThoughtCompletionDetector:
-    """Detects complete thoughts in streaming text using GPT-4o mini with parallel processing"""
+    """Detects complete thoughts in streaming text using GPT-4o mini"""
     
-    def __init__(self, model: str = "gpt-4o-mini", debug: bool = False, max_workers: int = 3):
+    def __init__(self, model: str = "gpt-4o-mini", debug: bool = False):
         self.model = model
         self.debug = debug
-        self.max_workers = max_workers
         self.text_buffer = ""
-        self.executor = None
+        self.processing_queue = queue.Queue()
+        self.result_queue = queue.Queue()
+        self.worker_thread = None
         self.running = False
         self.last_complete_thought = ""
         self.accumulated_partial = ""
         self.last_analyzed_text = ""  # Track what we last sent for analysis
         
-        # Track futures and their submission order
-        self.pending_futures: Dict[Future, str] = {}  # Future -> text mapping
-        self.future_order: List[Future] = []  # Maintains submission order
-        self.futures_lock = threading.Lock()
-        
-        # Results queue for maintaining FIFO order
-        self.result_queue = queue.Queue()
-        
         # For testing: store results by text
         self.results = {}
         self.results_lock = threading.Lock()
         
-        # Start the executor
-        self._start_executor()
+        # Start the worker thread
+        self._start_worker()
         
-    def _start_executor(self):
-        """Start the ThreadPoolExecutor for parallel API calls"""
+    def _start_worker(self):
+        """Start the background worker thread for API calls"""
         self.running = True
-        self.executor = ThreadPoolExecutor(max_workers=self.max_workers, thread_name_prefix='thought-detector')
+        self.worker_thread = threading.Thread(target=self._worker, daemon=True)
+        self.worker_thread.start()
         
-        if self.debug:
-            print(f"Started ThreadPoolExecutor with {self.max_workers} workers")
-            
+    def _worker(self):
+        """Background worker that processes API calls"""
+        while self.running:
+            try:
+                # Get text to analyze with a timeout
+                text = self.processing_queue.get(timeout=0.1)
+                
+                # Skip if text is too short or same as last analysis
+                if len(text.strip()) < 3:
+                    continue
+                    
+                # Analyze the text
+                result = self._analyze_text(text)
+                
+                # Store result
+                if result:
+                    with self.results_lock:
+                        self.results[text] = result
+                
+                # Put result in the result queue
+                self.result_queue.put((text, result))
+                
+            except queue.Empty:
+                continue
+            except Exception as e:
+                if self.debug:
+                    print(f"Worker error: {e}")
+                    
     def _analyze_text(self, text: str) -> Optional[ThoughtAnalysis]:
         """Analyze text for thought completion using LLM"""
         try:
@@ -156,31 +173,6 @@ You MUST respond with a JSON object containing exactly these fields:
                 print(f"Analysis error: {e}")
             return None
             
-    def _process_future_result(self, future: Future, text: str):
-        """Process the result of a completed future"""
-        try:
-            result = future.result()
-            
-            # Store result for testing
-            if result:
-                with self.results_lock:
-                    self.results[text] = result
-            
-            # Add to result queue
-            self.result_queue.put((text, result))
-            
-        except Exception as e:
-            if self.debug:
-                print(f"Future processing error for '{text}': {e}")
-            self.result_queue.put((text, None))
-        finally:
-            # Clean up future tracking
-            with self.futures_lock:
-                if future in self.pending_futures:
-                    del self.pending_futures[future]
-                if future in self.future_order:
-                    self.future_order.remove(future)
-                    
     def process_text(self, new_text: str) -> Optional[Tuple[str, ThoughtAnalysis]]:
         """
         Process new transcribed text and return complete thought if detected
@@ -196,21 +188,11 @@ You MUST respond with a JSON object containing exactly these fields:
         if len(new_text) > len(self.last_analyzed_text):
             self.last_analyzed_text = new_text
             
-            # Skip if text is too short
-            if len(new_text.strip()) >= 3:
-                # Submit analysis task to executor
-                future = self.executor.submit(self._analyze_text, new_text)
-                
-                # Track the future
-                with self.futures_lock:
-                    self.pending_futures[future] = new_text
-                    self.future_order.append(future)
-                
-                # Set up callback to process result when complete
-                future.add_done_callback(lambda f: self._process_future_result(f, new_text))
-                
-                if self.debug:
-                    print(f"Submitted analysis for '{new_text}' (active tasks: {len(self.pending_futures)})")
+            # Add to processing queue (non-blocking)
+            try:
+                self.processing_queue.put(new_text, block=False)
+            except queue.Full:
+                pass
         
         # Check for results (non-blocking)
         try:
@@ -263,15 +245,7 @@ You MUST respond with a JSON object containing exactly these fields:
             ThoughtAnalysis result or None if timeout
         """
         # Submit for analysis
-        future = self.executor.submit(self._analyze_text, text)
-        
-        # Track the future
-        with self.futures_lock:
-            self.pending_futures[future] = text
-            self.future_order.append(future)
-        
-        # Set up callback
-        future.add_done_callback(lambda f: self._process_future_result(f, text))
+        self.processing_queue.put(text)
         
         # Wait for result
         start_time = time.time()
@@ -286,18 +260,7 @@ You MUST respond with a JSON object containing exactly these fields:
         return None
         
     def stop(self):
-        """Stop the executor and clean up"""
+        """Stop the worker thread"""
         self.running = False
-        if self.executor:
-            # Cancel pending futures
-            with self.futures_lock:
-                for future in self.pending_futures:
-                    future.cancel()
-                self.pending_futures.clear()
-                self.future_order.clear()
-                
-            # Shutdown executor
-            self.executor.shutdown(wait=True, cancel_futures=True)
-            
-            if self.debug:
-                print("ThreadPoolExecutor shutdown complete")
+        if self.worker_thread:
+            self.worker_thread.join(timeout=1.0)

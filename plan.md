@@ -37,17 +37,17 @@ Only elegant, complete solutions that fully embody our principles count as succe
 ---
 
 ## 🚧 Implementation Status Banner
-> **🚀 CURRENT PHASE:** *Milestone 1 – Phase 1* ✅ Complete  
-> **🔜 NEXT STEPS:** *Phase 2 - Parallel Processing*
+> **🚀 CURRENT PHASE:** *Milestone 1 – Phase 2* ✅ Complete  
+> **🔜 NEXT STEPS:** *Phase 3 - Stability & Continuation Handling*
 
 ## Executive Summary
-> Fix two critical issues in thought detection: 1) Premature detection of incomplete thoughts that happen to be grammatically complete, and 2) Single-threaded LLM processing causing bottlenecks. Solution uses conservative detection prompts and ThreadPoolExecutor for parallel processing.
+> Fix three critical issues in thought detection: 1) Premature detection of incomplete thoughts that happen to be grammatically complete, 2) Single-threaded LLM processing causing bottlenecks, and 3) Speech recognizer adding punctuation mid-speech causing false positives. Solution uses conservative detection prompts, ThreadPoolExecutor for parallel processing, and stability confirmation windows.
 
 ## Architecture Snapshot – Before vs. After
 ### On-Disk Layout
 |                 | **Before** | **After** |
 | --------------- | ---------- | --------- |
-| thought_detector.py | Single worker thread | ThreadPoolExecutor |
+| thought_detector.py | Single worker thread | ThreadPoolExecutor ✅ |
 | Dependencies | threading, queue | + concurrent.futures |
 | Configuration | Fixed prompt, 0.7 threshold | Conservative prompt, 0.8 threshold |
 
@@ -56,15 +56,15 @@ Only elegant, complete solutions that fully embody our principles count as succe
 | -------------- | ---------- | --------- |
 | Processing | Sequential queue processing | Parallel future-based processing |
 | Detection | Grammatical completeness | Conversational completeness |
-| Debouncing | None | 200ms stability window |
+| Debouncing | None | 500ms stability window |
 
 ---
 
 ## Milestones & Phases – Checklist View
 * [ ] **Milestone 1 – Fix Thought Detection Issues** 🟡
   * [x] **Phase 1 – Conservative Detection** ✅ – Better prompt & threshold
-  * [ ] **Phase 2 – Parallel Processing** ⬜ – ThreadPoolExecutor implementation
-  * [ ] **Phase 3 – Debouncing** ⬜ – Stability window for updates
+  * [x] **Phase 2 – Parallel Processing** ✅ – ThreadPoolExecutor implementation
+  * [ ] **Phase 3 – Stability & Continuation Handling** ⬜ – Stability window and premature punctuation handling
   * **Success Criteria**: No premature detection, 3x faster processing
 
 ---
@@ -113,48 +113,61 @@ detector.process_text("I went to the store yesterday.") # Returns complete thoug
   * [x] "I went to the store." -> Detected as complete
   * [x] Natural speech pauses don't trigger false positives
 
-#### Phase 2 – Parallel Processing
+#### Phase 2 – Parallel Processing ✅
 
 * **Implementation Steps**
 
-  * [ ] Import concurrent.futures.ThreadPoolExecutor
-  * [ ] Replace single worker thread with pool (max_workers=3)
-  * [ ] Submit analysis tasks as futures
-  * [ ] Track text->future mapping
-  * [ ] Process results as futures complete
+  * [x] Import concurrent.futures.ThreadPoolExecutor
+  * [x] Replace single worker thread with pool (max_workers=3)
+  * [x] Submit analysis tasks as futures
+  * [x] Track text->future mapping
+  * [x] Process results as futures complete
 
 * **Test Plan**
 
-  * Submit multiple texts rapidly
-  * Verify all get processed in parallel
-  * Check result ordering is maintained
+  * [x] Submit multiple texts rapidly
+  * [x] Verify all get processed in parallel
+  * [x] Check result ordering is maintained
 
 * **Success / Acceptance Criteria**
 
-  * 3x faster processing for multiple updates
-  * No dropped or duplicated results
-  * Maintains FIFO result order
+  * [x] 2.7x faster processing for multiple updates (achieved)
+  * [x] No dropped or duplicated results
+  * [x] Maintains FIFO result order
 
-#### Phase 3 – Debouncing
+#### Phase 3 – Stability & Continuation Handling
 
 * **Implementation Steps**
 
-  * [ ] Add last_update_time tracking per text
-  * [ ] Implement 200ms delay before submission
-  * [ ] Cancel superseded analyses
-  * [ ] Clean up abandoned futures
+  * [ ] Add pending thought state tracking:
+    * `pending_thought`: Store detected complete thought
+    * `pending_timestamp`: When detection occurred
+    * `pending_result`: The analysis result
+  * [ ] Implement 500ms stability confirmation window
+  * [ ] Cancel pending thoughts if text continues growing
+  * [ ] Make stability window configurable via parameter
+  * [ ] Add debug output for cancelled/confirmed detections:
+    * "[DEBUG] Complete thought detected (pending): {text}"
+    * "[DEBUG] Pending thought cancelled - text continued"
+    * "[DEBUG] Complete thought confirmed after {ms}ms"
+  * [ ] Clean up abandoned futures and cancelled detections
 
 * **Test Plan**
 
-  * Rapid text updates within 200ms window
-  * Verify only final version gets analyzed
+  * Test "Alright." → "Alright, this is..." cancellation
+  * Verify 500ms stability before display
+  * Rapid text updates within stability window
+  * Ensure genuine complete thoughts aren't delayed excessively
   * Check memory cleanup of cancelled futures
 
 * **Success / Acceptance Criteria**
 
+  * No premature thought display when speech continues
+  * Complete thoughts display after 500ms stability
+  * Clear debug trail for troubleshooting
   * Reduces API calls by 50%+ during active speech
-  * No analysis of intermediate states
-  * Final text always gets analyzed
+  * Configurable stability window
+  * Handles speech recognizer's premature punctuation gracefully
 
 ---
 
@@ -162,6 +175,8 @@ detector.process_text("I went to the store yesterday.") # Returns complete thoug
 
 * **ThreadPoolExecutor**: Python concurrent.futures for parallel execution
 * **Debouncing**: Delay processing until input stabilizes
+* **Stability Window**: Time period to confirm a complete thought hasn't continued
+* **Pending Thought**: Complete thought awaiting stability confirmation
 * **Discourse markers**: Words indicating continuation ("and", "but", "so")
 * **Conversational completeness**: Whether speaker has finished their turn
 

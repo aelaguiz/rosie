@@ -54,9 +54,9 @@ def main():
     input_device_index = None  # None means default device
     mic_name, mic_index = get_microphone_info(input_device_index)
     
-    # Initialize the thought detector
-    print("Initializing thought detection...")
-    detector = ThoughtCompletionDetector(debug=False)
+    # Initialize the thought detector with parallel processing
+    print("Initializing thought detection with parallel processing (3 workers)...")
+    detector = ThoughtCompletionDetector(debug=False, max_workers=3)
     
     # Initialize the recorder
     print("Initializing speech-to-text...")
