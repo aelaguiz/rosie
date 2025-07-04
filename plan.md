@@ -37,129 +37,139 @@ Only elegant, complete solutions that fully embody our principles count as succe
 ---
 
 ## 🚧 Implementation Status Banner
-> **🚀 CURRENT PHASE:** *Milestone 1 – Phase 2* ✅ COMPLETED  
-> **🔜 NEXT STEPS:** *Implementation complete - MVP ready*
+> **🚀 CURRENT PHASE:** *Milestone 1 – Phase 1* ✅ Complete  
+> **🔜 NEXT STEPS:** *Phase 2 - Parallel Processing*
 
 ## Executive Summary
-> Create an MVP Python program that displays only complete thoughts (no partial transcription) with a simple status indicator showing current activity (Listening/Recording/Analyzing).
+> Fix two critical issues in thought detection: 1) Premature detection of incomplete thoughts that happen to be grammatically complete, and 2) Single-threaded LLM processing causing bottlenecks. Solution uses conservative detection prompts and ThreadPoolExecutor for parallel processing.
 
 ## Architecture Snapshot – Before vs. After
 ### On-Disk Layout
 |                 | **Before** | **After** |
 | --------------- | ---------- | --------- |
-| Main script | speech_demo.py (shows partial text) | complete_thoughts.py (status only) |
-| Dependencies | thought_detector.py, RealtimeSTT | Same (no changes) |
-| Configuration | .env with API key | Same (no changes) |
+| thought_detector.py | Single worker thread | ThreadPoolExecutor |
+| Dependencies | threading, queue | + concurrent.futures |
+| Configuration | Fixed prompt, 0.7 threshold | Conservative prompt, 0.8 threshold |
 
 ### Conceptual / Object Hierarchies
 |                | **Before** | **After** |
 | -------------- | ---------- | --------- |
-| Display | Real-time partial text + complete thoughts | Status indicator + complete thoughts only |
-| Status | Basic [Recording...] messages | Dynamic status: Listening → Recording → Analyzing |
-| Threading | Callbacks update display directly | Thread-safe status updates with lock |
+| Processing | Sequential queue processing | Parallel future-based processing |
+| Detection | Grammatical completeness | Conversational completeness |
+| Debouncing | None | 200ms stability window |
 
 ---
 
 ## Milestones & Phases – Checklist View
-* [x] **Milestone 1 – MVP Complete Thoughts Display** ✅
-  * [x] **Phase 1 – Create complete_thoughts.py** ✅ – New file with status-only display
-  * [x] **Phase 2 – Test & Verify** ✅ – Ensure clean output and proper status updates
-  * **Success Criteria**: Program shows only complete thoughts with clear status indicator
+* [ ] **Milestone 1 – Fix Thought Detection Issues** 🟡
+  * [x] **Phase 1 – Conservative Detection** ✅ – Better prompt & threshold
+  * [ ] **Phase 2 – Parallel Processing** ⬜ – ThreadPoolExecutor implementation
+  * [ ] **Phase 3 – Debouncing** ⬜ – Stability window for updates
+  * **Success Criteria**: No premature detection, 3x faster processing
 
 ---
 
 ## Test Plan
-* **Unit Tests**: Not needed for MVP
-* **Integration Tests**: Manual testing of status transitions
-* **End-to-End**: Speak several sentences, verify only complete thoughts appear
-* **Performance / Regression**: Ensure thought detection timing unchanged
+* **Unit Tests**: Test conservative detection with edge cases
+* **Integration Tests**: Verify parallel processing maintains order
+* **End-to-End**: Real speech with natural pauses
+* **Performance / Regression**: Measure latency reduction
 * **Tooling & CI Hooks**: None for MVP
 
 ---
 
 ## Target Output API (if applicable)
-```
-[Status] 🎤 Listening...
-[Status] 🔴 Recording...
-[Status] 🤔 Analyzing...
-
-[09:45:32] 💭 I went to the store yesterday.
-
-[Status] 🎤 Listening...
-[Status] 🔴 Recording...
-[Status] 🤔 Analyzing...
-
-[09:45:45] 💭 What time is the meeting tomorrow?
-
-[Status] 🎤 Listening...
+```python
+# Same API, better behavior
+detector.process_text("I went to the store") # Returns None (incomplete)
+detector.process_text("I went to the store yesterday.") # Returns complete thought
 ```
 
 ---
 
 ## Detailed Implementation Plan
 
-### Milestone 1 – MVP Complete Thoughts Display
+### Milestone 1 – Fix Thought Detection Issues
 
-#### Phase 1 – Create complete_thoughts.py
-
-* **Implementation Steps**
-
-  * [x] Copy speech_demo.py to complete_thoughts.py
-  * [x] Add global status variable and threading.Lock for thread safety
-  * [x] Modify create_process_text_callback to update status instead of showing partial text
-  * [x] Update on_recording_start to set "🔴 Recording..." status
-  * [x] Update on_recording_stop to set "🤔 Analyzing..." status  
-  * [x] Add status update to "🎤 Listening..." when idle
-  * [x] Ensure status line is cleared before showing complete thought
-  * [x] Format status with \r and padding to overwrite previous text
-
-* **Test Plan**
-
-  * Run program and verify status changes appropriately
-  * Speak partial sentences and ensure no text appears until complete
-  * Verify complete thoughts display with proper formatting
-  * Check status returns to "Listening" after thought displayed
-
-* **Success / Acceptance Criteria**
-
-  * No partial transcription text visible
-  * Status indicator clearly shows current state
-  * Complete thoughts appear formatted as before
-  * Clean transitions between states
-
-#### Phase 2 – Test & Verify
+#### Phase 1 – Conservative Detection ✅
 
 * **Implementation Steps**
 
-  * [x] Test with various speech patterns (fast/slow, pauses)
-  * [x] Verify no visual artifacts from status updates
-  * [x] Ensure Ctrl+C shutdown is clean
+  * [x] Update system prompt to emphasize conversational vs grammatical completeness
+  * [x] Add examples: "I went to the store" (incomplete) vs "I went to the store." (complete)
+  * [x] Include discourse markers as incompleteness signals ("and", "but", "so" at end)
+  * [x] Increase confidence threshold from 0.7 to 0.8
+  * [x] Add punctuation weight to detection logic
 
 * **Test Plan**
 
-  * Extended conversation testing
-  * Edge cases: very short/long thoughts
-  * Multiple rapid thoughts
+  * [x] Test sentences that are grammatically complete but likely to continue
+  * [x] Verify period vs no period makes a difference
+  * [x] Test with common speech patterns that pause mid-thought
 
 * **Success / Acceptance Criteria**
 
-  * Consistent behavior across different speech patterns
-  * No display corruption or artifacts
-  * Proper cleanup on exit
+  * [x] "I went to the store" -> Not detected as complete
+  * [x] "I went to the store." -> Detected as complete
+  * [x] Natural speech pauses don't trigger false positives
+
+#### Phase 2 – Parallel Processing
+
+* **Implementation Steps**
+
+  * [ ] Import concurrent.futures.ThreadPoolExecutor
+  * [ ] Replace single worker thread with pool (max_workers=3)
+  * [ ] Submit analysis tasks as futures
+  * [ ] Track text->future mapping
+  * [ ] Process results as futures complete
+
+* **Test Plan**
+
+  * Submit multiple texts rapidly
+  * Verify all get processed in parallel
+  * Check result ordering is maintained
+
+* **Success / Acceptance Criteria**
+
+  * 3x faster processing for multiple updates
+  * No dropped or duplicated results
+  * Maintains FIFO result order
+
+#### Phase 3 – Debouncing
+
+* **Implementation Steps**
+
+  * [ ] Add last_update_time tracking per text
+  * [ ] Implement 200ms delay before submission
+  * [ ] Cancel superseded analyses
+  * [ ] Clean up abandoned futures
+
+* **Test Plan**
+
+  * Rapid text updates within 200ms window
+  * Verify only final version gets analyzed
+  * Check memory cleanup of cancelled futures
+
+* **Success / Acceptance Criteria**
+
+  * Reduces API calls by 50%+ during active speech
+  * No analysis of intermediate states
+  * Final text always gets analyzed
 
 ---
 
 ## Glossary / References
 
-* **RealtimeSTT**: Real-time speech-to-text library
-* **ThoughtCompletionDetector**: Module that detects complete thoughts using GPT-4o mini
-* **Status indicator**: Single-line display showing current processing state
+* **ThreadPoolExecutor**: Python concurrent.futures for parallel execution
+* **Debouncing**: Delay processing until input stabilizes
+* **Discourse markers**: Words indicating continuation ("and", "but", "so")
+* **Conversational completeness**: Whether speaker has finished their turn
 
 ---
 
 ## Final Acceptance Checklist
 
-* [x] All success criteria met
+* [ ] All success criteria met
 * [ ] Docs updated - N/A for MVP
-* [ ] Metrics live - N/A for MVP  
-* [ ] Stakeholder sign-off - Awaiting Amir approval
+* [ ] Metrics live - N/A for MVP
+* [ ] Stakeholder sign-off - Amir approval

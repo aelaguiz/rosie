@@ -99,34 +99,43 @@ class ThoughtCompletionDetector:
         try:
             # Create the prompt
             system_prompt = """You are a linguistic expert analyzing real-time speech transcription.
-Your task is to determine if the given text represents a COMPLETE THOUGHT.
+Your task is to determine if the given text represents a CONVERSATIONALLY COMPLETE THOUGHT.
 
-A complete thought is:
-- A grammatically complete sentence (has subject and predicate)
-- A complete question
-- A coherent standalone statement
-- An interjection or exclamation that stands alone
+CRITICAL: Focus on CONVERSATIONAL completeness, not just grammatical completeness. In natural speech, people often pause mid-thought even when a sentence could technically stand alone.
+
+A thought is COMPLETE only when:
+- The speaker has clearly finished expressing their idea
+- There's strong punctuation (period, question mark, exclamation)
+- It's a clear, standalone response or statement
+- There's no expectation of immediate continuation
 
 A thought is INCOMPLETE if:
-- It ends mid-sentence or mid-phrase
-- It's missing essential grammatical components
-- It appears to be building toward something not yet expressed
-- It ends with filler words suggesting continuation (um, uh, like, so)
+- It lacks ending punctuation (especially periods)
+- It ends with discourse markers ("and", "but", "so", "because", "or")
+- It sounds like the speaker paused mid-thought
+- It's grammatically complete but conversationally expects more
+- It ends with filler words (um, uh, like, you know)
+- The tone suggests continuation
 
-Remember: In speech, people often pause mid-thought. Be conservative - only mark as complete if you're confident the speaker has finished expressing that particular idea.
+BE CONSERVATIVE: When in doubt, mark as INCOMPLETE. It's better to wait for more text than to prematurely cut off a thought.
 
 Examples of COMPLETE thoughts:
-- "I went to the store yesterday."
-- "What time is it?"
-- "That's amazing!"
-- "The weather is nice today."
+- "I went to the store yesterday." (has period, complete idea)
+- "What time is it?" (complete question with punctuation)
+- "That's amazing!" (complete exclamation)
+- "Yes." (complete response)
+- "The weather is nice today." (complete statement with period)
 
-Examples of INCOMPLETE thoughts:
-- "I went to the"
-- "What time is"
-- "The weather is nice but"
-- "One of the things I"
-- "So basically what I'm trying to"
+Examples of INCOMPLETE thoughts (even if grammatically valid):
+- "I went to the store" (no period, likely to continue)
+- "I went to the store and" (discourse marker at end)
+- "The weather is nice" (no period, may continue)
+- "What I mean is" (clearly expects continuation)
+- "One of the things about that is" (setup for more)
+- "So basically" (discourse marker, expects more)
+- "The thing is" (conversational setup)
+
+PUNCTUATION MATTERS: Presence of a period, question mark, or exclamation point is a strong signal of completeness. Absence is a strong signal of incompleteness.
 
 You MUST respond with a JSON object containing exactly these fields:
 {
@@ -191,7 +200,7 @@ You MUST respond with a JSON object containing exactly these fields:
                 text, result = self.result_queue.get_nowait()
                 
                 # If this analysis is for current text and it's complete
-                if result and text == self.accumulated_partial and result.is_complete and result.confidence > 0.7:
+                if result and text == self.accumulated_partial and result.is_complete and result.confidence > 0.8:
                     complete_thought = self.accumulated_partial
                     self.last_complete_thought = complete_thought
                     # Reset for next thought
