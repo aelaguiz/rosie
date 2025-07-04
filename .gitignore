@@ -23,3 +23,8 @@ ENV/
 # OS
 .DS_Store
 Thumbs.db
+
+# Project specific
+for_reference_only/
+prompt_examples/
+CLAUDE.md

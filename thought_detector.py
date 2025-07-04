@@ -51,6 +51,7 @@ class ThoughtCompletionDetector:
         self.running = False
         self.last_complete_thought = ""
         self.accumulated_partial = ""
+        self.last_analyzed_text = ""  # Track what we last sent for analysis
         
         # For testing: store results by text
         self.results = {}
@@ -171,15 +172,19 @@ You MUST respond with a JSON object containing exactly these fields:
             Tuple of (complete_thought_text, analysis) if a complete thought is detected
             None otherwise
         """
-        # Update accumulated partial text
+        # RealtimeSTT sends the full accumulated text each time
         self.accumulated_partial = new_text
         
-        # Add to processing queue (non-blocking)
-        try:
-            self.processing_queue.put(new_text, block=False)
-        except queue.Full:
-            pass
+        # Only analyze if text has grown (not shortened or same)
+        if len(new_text) > len(self.last_analyzed_text):
+            self.last_analyzed_text = new_text
             
+            # Add to processing queue (non-blocking)
+            try:
+                self.processing_queue.put(new_text, block=False)
+            except queue.Full:
+                pass
+        
         # Check for results (non-blocking)
         try:
             while True:
@@ -189,7 +194,9 @@ You MUST respond with a JSON object containing exactly these fields:
                 if result and text == self.accumulated_partial and result.is_complete and result.confidence > 0.7:
                     complete_thought = self.accumulated_partial
                     self.last_complete_thought = complete_thought
+                    # Reset for next thought
                     self.accumulated_partial = ""
+                    self.last_analyzed_text = ""
                     return (complete_thought, result)
                     
         except queue.Empty:

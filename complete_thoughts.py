@@ -4,6 +4,7 @@
 import os
 import threading
 import pyaudio
+from datetime import datetime
 from dotenv import load_dotenv
 from RealtimeSTT import AudioToTextRecorder
 from thought_detector import ThoughtCompletionDetector
@@ -19,6 +20,10 @@ def update_status(message):
     """Update the status line with thread safety"""
     global current_status
     with status_lock:
+        # DEBUG: Log status change
+        timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        print(f"\n[DEBUG {timestamp}] Status change: {current_status} -> {message}")
+        
         # Clear previous line and show new status
         clear_line = "\r" + " " * 80 + "\r"
         print(f"{clear_line}[Status] {message}", end='', flush=True)
@@ -28,14 +33,23 @@ def create_process_text_callback(detector):
     """Create a process_text callback with access to the detector"""
     def process_text(text):
         """Callback function that gets called with transcribed text"""
+        # DEBUG: Log callback invocation
+        timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        print(f"\n[DEBUG {timestamp}] process_text called with: '{text}' (len={len(text)})")
+        
         # Update status to show we're analyzing
         if text.strip():  # Only update if there's actual text
             update_status("🤔 Analyzing...")
         
         # Check for complete thoughts
         result = detector.process_text(text)
+        print(f"[DEBUG {timestamp}] Thought detection result: {result}")
+        
         if result:
             complete_thought, analysis = result
+            print(f"[DEBUG {timestamp}] Complete thought detected: '{complete_thought}'")
+            print(f"[DEBUG {timestamp}] Analysis: is_complete={analysis.is_complete}, confidence={analysis.confidence}")
+            
             # Clear the status line completely
             print("\r" + " " * 80 + "\r", end='', flush=True)
             # Show the complete thought
@@ -47,10 +61,14 @@ def create_process_text_callback(detector):
 
 def on_recording_start():
     """Called when recording starts"""
+    timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    print(f"\n[DEBUG {timestamp}] on_recording_start called")
     update_status("🔴 Recording...")
 
 def on_recording_stop():
     """Called when recording stops"""
+    timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    print(f"\n[DEBUG {timestamp}] on_recording_stop called")
     update_status("🤔 Analyzing...")
 
 def get_microphone_info(device_index=None):
@@ -74,7 +92,8 @@ def main():
     
     # Initialize the thought detector
     print("Initializing thought detection...")
-    detector = ThoughtCompletionDetector(debug=False)
+    print("[DEBUG] Setting ThoughtCompletionDetector debug=True")
+    detector = ThoughtCompletionDetector(debug=True)
     
     # Initialize the recorder
     print("Initializing speech-to-text...")
@@ -83,6 +102,12 @@ def main():
     
     # Create the callback with access to the detector
     process_text = create_process_text_callback(detector)
+    
+    print("\n[DEBUG] Creating AudioToTextRecorder with:")
+    print("  - enable_realtime_transcription: True")
+    print("  - on_realtime_transcription_update: process_text callback")
+    print("  - silero_sensitivity: 0.4")
+    print("  - post_speech_silence_duration: 0.7")
     
     recorder = AudioToTextRecorder(
         spinner=False,
@@ -107,12 +132,16 @@ def main():
     print("-" * 50)
     
     # Set initial status
+    print("\n[DEBUG] Setting initial status...")
     update_status("🎤 Listening...")
     
     try:
         while True:
             # This will continuously listen and transcribe
-            recorder.text()
+            timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            print(f"\n[DEBUG {timestamp}] Calling recorder.text() - waiting for speech...")
+            result = recorder.text()
+            print(f"[DEBUG {timestamp}] recorder.text() returned: '{result}'")
             # Status is maintained, no extra newline needed
     except KeyboardInterrupt:
         # Clear status line before exit messages
