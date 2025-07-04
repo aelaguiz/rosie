@@ -3,11 +3,29 @@
 
 import os
 import pyaudio
+from dotenv import load_dotenv
 from RealtimeSTT import AudioToTextRecorder
+from thought_detector import ThoughtCompletionDetector
 
-def process_text(text):
-    """Callback function that gets called with transcribed text"""
-    print(f"\r{text}", end='', flush=True)
+# Load environment variables from .env file
+load_dotenv()
+
+def create_process_text_callback(detector):
+    """Create a process_text callback with access to the detector"""
+    def process_text(text):
+        """Callback function that gets called with transcribed text"""
+        # Show real-time transcription
+        print(f"\r{text}", end='', flush=True)
+        
+        # Check for complete thoughts
+        result = detector.process_text(text)
+        if result:
+            complete_thought, analysis = result
+            # Clear the current line and show the complete thought
+            print("\r" + " " * len(text) + "\r", end='', flush=True)
+            print(detector.format_complete_thought(complete_thought))
+    
+    return process_text
 
 def on_recording_start():
     """Called when recording starts"""
@@ -36,10 +54,17 @@ def main():
     input_device_index = None  # None means default device
     mic_name, mic_index = get_microphone_info(input_device_index)
     
+    # Initialize the thought detector
+    print("Initializing thought detection...")
+    detector = ThoughtCompletionDetector(debug=False)
+    
     # Initialize the recorder
     print("Initializing speech-to-text...")
     print(f"Using microphone: {mic_name} (device #{mic_index})")
     print("-" * 50)
+    
+    # Create the callback with access to the detector
+    process_text = create_process_text_callback(detector)
     
     recorder = AudioToTextRecorder(
         spinner=False,
@@ -60,6 +85,7 @@ def main():
     
     print("Ready! Start speaking...")
     print("Press Ctrl+C to exit\n")
+    print("Complete thoughts will appear in green 💭\n")
     
     try:
         while True:
@@ -68,6 +94,7 @@ def main():
             print()  # New line after each sentence
     except KeyboardInterrupt:
         print("\n\nStopping...")
+        detector.stop()
         recorder.stop()
         print("Goodbye!")
 
