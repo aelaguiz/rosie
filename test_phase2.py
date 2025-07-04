@@ -6,7 +6,7 @@ import time
 import threading
 from concurrent.futures import as_completed
 from dotenv import load_dotenv
-from thought_detector_phase2 import ThoughtCompletionDetector
+from thought_detector import ThoughtCompletionDetector
 
 # Load environment variables from .env file
 load_dotenv()
@@ -37,21 +37,26 @@ def test_parallel_speedup():
     
     start_time = time.time()
     
-    # Submit all texts at once
-    futures = []
-    for text in test_texts:
-        future = detector.executor.submit(detector._analyze_text, text)
-        futures.append((text, future))
-    
-    # Collect results
+    # Submit all texts at once using wait_for_result (public API)
     results = []
-    for text, future in futures:
-        try:
-            result = future.result(timeout=10.0)
+    import threading
+    results_lock = threading.Lock()
+    
+    def analyze_text(text):
+        result = detector.wait_for_result(text, timeout=10.0)
+        with results_lock:
             results.append((text, result))
-        except Exception as e:
-            print(f"Error: {e}")
-            results.append((text, None))
+    
+    # Create threads to analyze texts in parallel
+    threads = []
+    for text in test_texts:
+        thread = threading.Thread(target=analyze_text, args=(text,))
+        threads.append(thread)
+        thread.start()
+    
+    # Wait for all threads to complete
+    for thread in threads:
+        thread.join()
     
     duration = time.time() - start_time
     detector.stop()
@@ -178,22 +183,32 @@ def test_concurrent_streaming():
         "Great work today!"
     ]
     
-    # Submit all at once
-    futures = []
-    for text in test_sentences:
-        future = detector.executor.submit(detector._analyze_text, text)
-        futures.append((text, future))
-    
-    # Collect results
+    # Submit all at once using wait_for_result (public API)
     results = []
-    for text, future in futures:
-        try:
-            result = future.result(timeout=5.0)
-            if result and result.is_complete:
+    import threading
+    results_lock = threading.Lock()
+    
+    def analyze_text(text):
+        result = detector.wait_for_result(text, timeout=5.0)
+        if result and result.is_complete:
+            with results_lock:
                 results.append(text)
                 print(f"✓ Complete thought: '{text}'")
-        except Exception as e:
-            print(f"✗ Error with '{text}': {e}")
+        elif result:
+            print(f"✗ Incomplete: '{text}'")
+        else:
+            print(f"✗ Timeout: '{text}'")
+    
+    # Create threads to analyze texts in parallel
+    threads = []
+    for text in test_sentences:
+        thread = threading.Thread(target=analyze_text, args=(text,))
+        threads.append(thread)
+        thread.start()
+    
+    # Wait for all threads to complete
+    for thread in threads:
+        thread.join()
     
     detector.stop()
     

@@ -56,7 +56,6 @@ class ThoughtCompletionDetector:
         
         # Track futures and their submission order
         self.pending_futures: Dict[Future, str] = {}  # Future -> text mapping
-        self.future_order: List[Future] = []  # Maintains submission order
         self.futures_lock = threading.Lock()
         
         # Results queue for maintaining FIFO order
@@ -140,7 +139,8 @@ You MUST respond with a JSON object containing exactly these fields:
                 messages=messages,
                 response_format={"type": "json_object"},
                 temperature=0.3,  # Lower temperature for more consistent analysis
-                max_tokens=150
+                max_tokens=150,
+                timeout=15.0  # Add timeout to prevent hanging on API calls
             )
             
             # Parse the response
@@ -178,8 +178,6 @@ You MUST respond with a JSON object containing exactly these fields:
             with self.futures_lock:
                 if future in self.pending_futures:
                     del self.pending_futures[future]
-                if future in self.future_order:
-                    self.future_order.remove(future)
                     
     def process_text(self, new_text: str) -> Optional[Tuple[str, ThoughtAnalysis]]:
         """
@@ -198,16 +196,23 @@ You MUST respond with a JSON object containing exactly these fields:
             
             # Skip if text is too short
             if len(new_text.strip()) >= 3:
+                # Check for backpressure - limit pending tasks to prevent overload
+                with self.futures_lock:
+                    if len(self.pending_futures) >= self.max_workers:
+                        if self.debug:
+                            print(f"Skipping analysis for '{new_text}': worker pool is full ({self.max_workers} pending tasks)")
+                        return None
+                
                 # Submit analysis task to executor
                 future = self.executor.submit(self._analyze_text, new_text)
                 
                 # Track the future
                 with self.futures_lock:
                     self.pending_futures[future] = new_text
-                    self.future_order.append(future)
                 
                 # Set up callback to process result when complete
-                future.add_done_callback(lambda f: self._process_future_result(f, new_text))
+                # Use default argument to capture new_text value at lambda creation time
+                future.add_done_callback(lambda f, t=new_text: self._process_future_result(f, t))
                 
                 if self.debug:
                     print(f"Submitted analysis for '{new_text}' (active tasks: {len(self.pending_futures)})")
@@ -268,7 +273,6 @@ You MUST respond with a JSON object containing exactly these fields:
         # Track the future
         with self.futures_lock:
             self.pending_futures[future] = text
-            self.future_order.append(future)
         
         # Set up callback
         future.add_done_callback(lambda f: self._process_future_result(f, text))
@@ -294,7 +298,6 @@ You MUST respond with a JSON object containing exactly these fields:
                 for future in self.pending_futures:
                     future.cancel()
                 self.pending_futures.clear()
-                self.future_order.clear()
                 
             # Shutdown executor
             self.executor.shutdown(wait=True, cancel_futures=True)
