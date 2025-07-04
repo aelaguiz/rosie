@@ -52,6 +52,10 @@ class ThoughtCompletionDetector:
         self.last_complete_thought = ""
         self.accumulated_partial = ""
         
+        # For testing: store results by text
+        self.results = {}
+        self.results_lock = threading.Lock()
+        
         # Start the worker thread
         self._start_worker()
         
@@ -74,6 +78,11 @@ class ThoughtCompletionDetector:
                     
                 # Analyze the text
                 result = self._analyze_text(text)
+                
+                # Store result
+                if result:
+                    with self.results_lock:
+                        self.results[text] = result
                 
                 # Put result in the result queue
                 self.result_queue.put((text, result))
@@ -199,6 +208,32 @@ You MUST respond with a JSON object containing exactly these fields:
         formatted = f"\n{Fore.YELLOW}[{time_str}]{Style.RESET_ALL} {Fore.GREEN}{Style.BRIGHT}💭 {thought}{Style.RESET_ALL}\n"
         
         return formatted
+    
+    def wait_for_result(self, text: str, timeout: float = 5.0) -> Optional[ThoughtAnalysis]:
+        """
+        Wait for a specific text's analysis result (for testing)
+        
+        Args:
+            text: The text to analyze
+            timeout: Maximum time to wait for result
+            
+        Returns:
+            ThoughtAnalysis result or None if timeout
+        """
+        # Submit for analysis
+        self.processing_queue.put(text)
+        
+        # Wait for result
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            # Check if result is available
+            with self.results_lock:
+                if text in self.results:
+                    return self.results[text]
+                    
+            time.sleep(0.1)
+            
+        return None
         
     def stop(self):
         """Stop the worker thread"""
