@@ -8,7 +8,7 @@ import pyaudio
 from datetime import datetime
 from dotenv import load_dotenv
 from RealtimeSTT import AudioToTextRecorder
-from thought_detector import ThoughtCompletionDetector
+from grouping_strategies import create_strategy
 
 # Load environment variables from .env file
 load_dotenv()
@@ -16,6 +16,10 @@ load_dotenv()
 # Global status management
 status_lock = threading.Lock()
 current_status = ""
+
+# Global accumulator for real-time transcription
+accumulated_text = ""
+accumulated_text_lock = threading.Lock()
 
 def update_status(message):
     """Update the status line with thread safety"""
@@ -34,20 +38,31 @@ def create_process_text_callback(realtime_model):
     """Create a process_text callback for real-time status updates only"""
     def process_text(text):
         """Callback function that gets called with transcribed text"""
+        global accumulated_text
         # DEBUG: Log callback invocation
         timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         print(f"\n[DEBUG {timestamp}] Real-time transcription: '{text}' (len={len(text)}) [model: {realtime_model}]")
         
-        # Just update status to show we're transcribing
+        # Capture the accumulated text
         if text.strip():  # Only update if there's actual text
+            with accumulated_text_lock:
+                accumulated_text = text
+                print(f"[DEBUG {timestamp}] Captured accumulated_text: '{accumulated_text[:50]}...' (len={len(accumulated_text)})")
             update_status("🔊 Transcribing...")
     
     return process_text
 
 def on_recording_start():
     """Called when recording starts"""
+    global accumulated_text
     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
     print(f"\n[DEBUG {timestamp}] on_recording_start called")
+    
+    # Reset accumulated text for new recording
+    with accumulated_text_lock:
+        accumulated_text = ""
+        print(f"[DEBUG {timestamp}] Reset accumulated_text")
+    
     update_status("🔴 Recording...")
 
 def on_recording_stop():
@@ -101,17 +116,28 @@ def get_microphone_info(device_index=None):
     finally:
         p.terminate()
 
-def handle_complete_thought(detector, thought, analysis):
-    """Handle complete thought detection via callback"""
+def handle_complete_group(strategy, text, metadata):
+    """Handle complete group detection via callback"""
     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-    print(f"\n[DEBUG {timestamp}] Complete thought callback triggered!")
-    print(f"[DEBUG {timestamp}] Complete thought: '{thought}'")
-    print(f"[DEBUG {timestamp}] Analysis: is_complete={analysis.is_complete}, confidence={analysis.confidence}")
+    print(f"\n[DEBUG {timestamp}] Complete group callback triggered!")
+    print(f"[DEBUG {timestamp}] Group type: {metadata.get('type', 'unknown')}")
+    print(f"[DEBUG {timestamp}] Text: '{text}'")
+    print(f"[DEBUG {timestamp}] Metadata: {metadata}")
     
     # Clear the status line completely
     print("\r" + " " * 80 + "\r", end='', flush=True)
-    # Show the complete thought
-    print(detector.format_complete_thought(thought))
+    
+    # Show the complete group based on type
+    if metadata.get('type') == 'thought':
+        # Use thought-specific formatting if available
+        if hasattr(strategy, 'format_complete_thought'):
+            print(strategy.format_complete_thought(text))
+        else:
+            print(f"\n💭 Complete Thought: {text}\n")
+    else:
+        # Generic group display
+        print(f"\n📝 Complete {metadata.get('type', 'Group')}: {text}\n")
+    
     # Return to listening status
     update_status("🎤 Listening...")
 
@@ -124,6 +150,9 @@ def main():
                         help='Whisper model for final transcription (tiny, base, small, medium, large-v1, large-v2)')
     parser.add_argument('--realtime-model', type=str, default=None,
                         help='Whisper model for realtime transcription (defaults to same as --model)')
+    parser.add_argument('--strategy', type=str, default='thought',
+                        choices=['thought', 'topic'],
+                        help='Grouping strategy to use (thought or topic)')
     args = parser.parse_args()
     
     # Set realtime model to match main model if not specified
@@ -139,14 +168,15 @@ def main():
     input_device_index = args.mic  # None means default device
     mic_name, mic_index = get_microphone_info(input_device_index)
     
-    # Initialize the thought detector
-    print("Initializing thought detection...")
-    print("[DEBUG] Setting ThoughtCompletionDetector debug=True")
+    # Initialize the grouping strategy
+    print(f"Initializing {args.strategy} grouping strategy...")
+    print(f"[DEBUG] Setting {args.strategy} strategy debug=True")
     
-    # Create detector with callback
-    detector = ThoughtCompletionDetector(
+    # Create strategy with callback
+    strategy = create_strategy(
+        args.strategy,
         debug=True,
-        on_thought_complete=lambda thought, analysis: handle_complete_thought(detector, thought, analysis)
+        on_group_complete=lambda text, metadata: handle_complete_group(strategy, text, metadata)
     )
     
     # Initialize the recorder
@@ -204,23 +234,24 @@ def main():
             result = recorder.text()
             print(f"[DEBUG {timestamp}] recorder.text() returned: '{result}' [model: {args.model}]")
             
-            # Now analyze the final transcription for complete thoughts
-            if result and result.strip():
-                update_status("🤔 Analyzing final transcription...")
+            # Use accumulated text instead of final transcription
+            with accumulated_text_lock:
+                text_to_process = accumulated_text
+            
+            if text_to_process and text_to_process.strip():
+                update_status("🤔 Analyzing accumulated transcription...")
+                print(f"[DEBUG {timestamp}] Using accumulated_text: '{text_to_process}' (len={len(text_to_process)})")
+                print(f"[DEBUG {timestamp}] Ignoring recorder.text() result: '{result}'")
                 
-                # Send final transcription to thought detector
-                thought_result = detector.process_text(result)
-                print(f"[DEBUG {timestamp}] Final thought detection result: {thought_result}")
-                
-                if not thought_result:
-                    # Not a complete thought, just show the partial utterance
-                    print(f"\n💬 Partial: {result}")
+                # Send accumulated text to grouping strategy
+                strategy.process_text(text_to_process, datetime.now())
+                print(f"[DEBUG {timestamp}] Sent accumulated text to {args.strategy} strategy for processing")
                 # If it was a complete thought, the callback already handled it
     except KeyboardInterrupt:
         # Clear status line before exit messages
         print("\r" + " " * 80 + "\r", end='', flush=True)
         print("\nStopping...")
-        detector.stop()
+        strategy.stop()
         recorder.stop()
         print("Goodbye!")
 

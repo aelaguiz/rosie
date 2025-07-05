@@ -37,157 +37,212 @@ Only elegant, complete solutions that fully embody our principles count as succe
 ---
 
 ## 🚧 Implementation Status Banner
-> **🚀 CURRENT PHASE:** *Milestone 1 – Phase 2* ✅ Complete  
-> **🔜 NEXT STEPS:** *Phase 3 - Stability & Continuation Handling*
+> **🚀 CURRENT PHASE:** *Not Started*  
+> **🔜 NEXT STEPS:** *Milestone 1 – Phase 1 – Create Abstraction Layer*
 
 ## Executive Summary
-> Fix three critical issues in thought detection: 1) System incorrectly relying on punctuation that doesn't exist in real-time transcription, 2) Single-threaded LLM processing causing bottlenecks, and 3) Analyzing mid-speech fragments instead of waiting for natural pauses. Solution uses timing-based detection with pause thresholds, ThreadPoolExecutor for parallel processing, and conversational completeness focus.
+> Replace the current thought-level grouping with a topic/time/voice-cue based approach. This creates an abstraction layer allowing swappable grouping strategies, implements voice commands ("new note", "discard that"), and uses dual LLM checks for topic continuity and coherence. Storage is simple JSONL for MVP.
 
 ## Architecture Snapshot – Before vs. After
 ### On-Disk Layout
 |                 | **Before** | **After** |
 | --------------- | ---------- | --------- |
-| thought_detector.py | Single worker thread | ThreadPoolExecutor ✅ |
-| Dependencies | threading, queue | + concurrent.futures |
-| Configuration | Fixed prompt, 0.7 threshold | Conservative prompt, 0.8 threshold |
+| Core logic | thought_detector.py | thought_detector.py + grouping_strategies.py |
+| Storage | None (display only) | memories.jsonl |
+| Main app | complete_thoughts.py | complete_thoughts.py (with --strategy flag) |
 
 ### Conceptual / Object Hierarchies
 |                | **Before** | **After** |
 | -------------- | ---------- | --------- |
-| Processing | Sequential queue processing | Parallel future-based processing |
-| Detection | Punctuation-based | Timing & content-based |
-| Timing | Immediate analysis | 0.5s pause + 5s auto-complete |
+| Grouping | ThoughtCompletionDetector (hardcoded) | GroupingStrategy abstraction |
+| Detection | Single LLM prompt for thoughts | Dual prompts: gatekeeper + coherence |
+| State | Simple accumulated text | Buffer with status (OPEN/PAUSED/DISCARD) |
+| Output | Console display only | Console + persistent memory storage |
 
 ---
 
 ## Milestones & Phases – Checklist View
-* [ ] **Milestone 1 – Fix Thought Detection Issues** 🟡
-  * [x] **Phase 1 – Conservative Detection** ✅ – Better prompt & threshold
-  * [x] **Phase 2 – Parallel Processing** ✅ – ThreadPoolExecutor implementation
-  * [ ] **Phase 3 – Timing-Based Detection & Auto-Complete** ⬜ – Pause detection and 5s timeout
-  * **Success Criteria**: Timing-based detection working, no punctuation dependency, 3x faster processing
+* [ ] **Milestone 1 – Abstraction & Refactor** 🟡
+  * [ ] **Phase 1 – Create Abstraction Layer** 🔴 – Extract strategy pattern
+  * [ ] **Phase 2 – Preserve Existing Functionality** ⬜ – Ensure no regression
+  * **Success Criteria**: Can switch strategies via --strategy flag, existing thought detection works
+
+* [ ] **Milestone 2 – Topic Grouping Implementation** ⬜
+  * [ ] **Phase 3 – Core Buffer Management** ⬜ – Implement TopicGroupingStrategy
+  * [ ] **Phase 4 – Voice Cue Detection** ⬜ – Add command recognition
+  * [ ] **Phase 5 – Timing Controls** ⬜ – Idle timer thread
+  * **Success Criteria**: Voice cues work, timeouts trigger correctly
+
+* [ ] **Milestone 3 – LLM & Storage** ⬜
+  * [ ] **Phase 6 – Dual LLM Prompts** ⬜ – Gatekeeper + coherence
+  * [ ] **Phase 7 – JSONL Storage** ⬜ – Simple file append
+  * **Success Criteria**: Memories stored persistently, topic continuity works
 
 ---
 
 ## Test Plan
-* **Unit Tests**: Test conservative detection with edge cases
-* **Integration Tests**: Verify parallel processing maintains order
-* **End-to-End**: Real speech with natural pauses
-* **Performance / Regression**: Measure latency reduction
+* **Unit Tests**: None for MVP (manual testing only)
+* **Integration Tests**: Manual microphone testing
+* **End-to-End**: Speak with voice cues, verify storage
+* **Performance / Regression**: Ensure thought mode still works
 * **Tooling & CI Hooks**: None for MVP
 
 ---
 
 ## Target Output API (if applicable)
 ```python
-# Same API, better behavior - no punctuation dependency
-detector.process_text("I went to the store") # Returns None (trails off, incomplete)
-detector.process_text("I went to the store yesterday") # Returns complete thought (after 0.5s pause)
-# After 5 seconds of silence, any text becomes complete automatically
+# Strategy abstraction
+class GroupingStrategy:
+    def process_text(self, text: str, timestamp: datetime) -> None
+    def get_status(self) -> str
+    def flush(self, action: str = "store") -> None
+    
+# Memory storage format (JSONL)
+{
+    "start_ts": "2025-01-04T20:15:00Z",
+    "end_ts": "2025-01-04T20:15:45Z", 
+    "text": "This is a complete topic about...",
+    "voice_cue_flags": ["manual_split"],
+    "tags": []
+}
 ```
 
 ---
 
 ## Detailed Implementation Plan
 
-### Milestone 1 – Fix Thought Detection Issues
+### Milestone 1 – Abstraction & Refactor
 
-#### Phase 1 – Conservative Detection ✅
-
-* **Implementation Steps**
-
-  * [x] Update system prompt to emphasize conversational vs grammatical completeness
-  * [x] Rewrite prompt to focus on conversational thought completion
-  * [x] Remove ALL punctuation dependencies from examples and logic
-  * [x] Include discourse markers as incompleteness signals ("and", "but", "so" at end)
-  * [x] Increase confidence threshold from 0.7 to 0.8
-
-* **Test Plan**
-
-  * [x] Test sentences that are grammatically complete but likely to continue
-  * [x] Test with common speech patterns that pause mid-thought
-  * [x] Verify examples work without any punctuation
-
-* **Success / Acceptance Criteria**
-
-  * [x] "I went to the store" -> Not detected as complete (trails off)
-  * [x] "I went to the store yesterday" -> Detected as complete (full idea)
-  * [x] Natural speech pauses don't trigger false positives
-
-#### Phase 2 – Parallel Processing ✅
+#### Phase 1 – Create Abstraction Layer
 
 * **Implementation Steps**
-
-  * [x] Import concurrent.futures.ThreadPoolExecutor
-  * [x] Replace single worker thread with pool (max_workers=3)
-  * [x] Submit analysis tasks as futures
-  * [x] Track text->future mapping
-  * [x] Process results as futures complete
+  * [ ] Create grouping_strategies.py with abstract base class
+  * [ ] Define GroupingStrategy interface (process_text, get_status, flush)
+  * [ ] Add on_group_complete callback mechanism
+  * [ ] Create factory function for strategy instantiation
 
 * **Test Plan**
-
-  * [x] Submit multiple texts rapidly
-  * [x] Verify all get processed in parallel
-  * [x] Check result ordering is maintained
+  * Run existing complete_thoughts.py unchanged
+  * Verify no functionality broken
 
 * **Success / Acceptance Criteria**
+  * Clean abstraction defined
+  * No changes to existing behavior yet
 
-  * [x] 2.7x faster processing for multiple updates (achieved)
-  * [x] No dropped or duplicated results
-  * [x] Maintains FIFO result order
-
-#### Phase 3 – Timing-Based Detection & Auto-Complete
+#### Phase 2 – Preserve Existing Functionality
 
 * **Implementation Steps**
-
-  * [ ] Add timing state tracking:
-    * `last_text_update_time`: Track when text last changed
-    * `pause_timer`: Timer for 0.5s pause detection
-    * `auto_complete_timer`: Timer for 5s auto-complete
-  * [ ] Implement pause detection mechanism:
-    * Only submit for analysis after 0.5+ seconds of no new text
-    * Cancel pending timers when new text arrives
-    * Prevent analysis of mid-speech fragments
-  * [ ] Add 5-second auto-complete rule:
-    * If no new text for 5+ seconds, mark as complete
-    * No LLM call needed for this case
-    * Immediate thought completion
-  * [ ] Create configurable timing parameters:
-    * `min_pause_before_analysis`: 0.5 seconds (default)
-    * `auto_complete_timeout`: 5.0 seconds (default)
-  * [ ] Add debug output for timing events:
-    * "[DEBUG] Text updated, resetting timers"
-    * "[DEBUG] 0.5s pause detected, submitting for analysis"
-    * "[DEBUG] 5s timeout reached, auto-completing thought"
+  * [ ] Create ThoughtGroupingStrategy class
+  * [ ] Move ThoughtCompletionDetector logic into strategy
+  * [ ] Update complete_thoughts.py to use strategy pattern
+  * [ ] Add --strategy flag (default="thought")
 
 * **Test Plan**
-
-  * Test rapid speech with brief pauses < 0.5s
-  * Verify 0.5s pause triggers analysis
-  * Test 5s pause auto-completes without LLM
-  * Ensure mid-speech fragments aren't analyzed
-  * Test timer cancellation on new text
+  * Test with microphone input
+  * Verify thoughts still detected correctly
+  * Test --strategy thought explicitly
 
 * **Success / Acceptance Criteria**
+  * Existing functionality preserved
+  * Can explicitly choose thought strategy
 
-  * No analysis of mid-speech fragments
-  * Natural pauses (0.5s+) trigger thought detection
-  * Long pauses (5s+) always complete the thought
-  * 50%+ reduction in API calls
-  * Configurable timing thresholds
-  * Works with unpunctuated real-time transcription
+### Milestone 2 – Topic Grouping Implementation
+
+#### Phase 3 – Core Buffer Management
+
+* **Implementation Steps**
+  * [ ] Create TopicGroupingStrategy class
+  * [ ] Implement buffer state: {start_ts, last_ts, sentences[], status}
+  * [ ] Add status transitions (OPEN → PAUSED → OPEN)
+  * [ ] Implement basic append logic
+
+* **Test Plan**
+  * Test buffer accumulates sentences
+  * Verify status transitions work
+
+* **Success / Acceptance Criteria**
+  * Buffer correctly accumulates text
+  * Status tracking works
+
+#### Phase 4 – Voice Cue Detection
+
+* **Implementation Steps**
+  * [ ] Add voice cue detection in process_text
+  * [ ] Implement "new note" → flush("store") + start new
+  * [ ] Implement "discard that" → flush("discard")
+  * [ ] Add "pause note" / "resume note" (optional for MVP)
+
+* **Test Plan**
+  * Say "new note" and verify flush
+  * Say "discard that" and verify discard
+  * Test cues mid-sentence
+
+* **Success / Acceptance Criteria**
+  * Voice cues trigger correct actions
+  * Buffer resets appropriately
+
+#### Phase 5 – Timing Controls
+
+* **Implementation Steps**
+  * [ ] Add idle timer thread (check every 1s)
+  * [ ] Implement max_gap (90s) check
+  * [ ] Implement max_lifetime (5min) check
+  * [ ] Add configurable timing parameters
+
+* **Test Plan**
+  * Test 90s silence triggers flush
+  * Test 5min lifetime triggers flush
+  * Verify timer cancellation on new text
+
+* **Success / Acceptance Criteria**
+  * Timeouts work correctly
+  * No race conditions
+
+### Milestone 3 – LLM & Storage
+
+#### Phase 6 – Dual LLM Prompts
+
+* **Implementation Steps**
+  * [ ] Create gatekeeper prompt for topic continuity
+  * [ ] Create coherence prompt for flush decision
+  * [ ] Add probability thresholds (belongs > 0.6, coherence > 0.4)
+  * [ ] Integrate LLM calls at appropriate points
+
+* **Test Plan**
+  * Test topic switches detected
+  * Test coherent topics stored
+  * Test incoherent rambling discarded
+
+* **Success / Acceptance Criteria**
+  * Topic continuity detection works
+  * Low-quality content discarded
+
+#### Phase 7 – JSONL Storage
+
+* **Implementation Steps**
+  * [ ] Create memories.jsonl append function
+  * [ ] Implement memory_ready event handler
+  * [ ] Add timestamp and metadata to memories
+  * [ ] Add debug logging for storage events
+
+* **Test Plan**
+  * Verify memories.jsonl created
+  * Check format is valid JSONL
+  * Test multiple memory appends
+
+* **Success / Acceptance Criteria**
+  * Memories persist across sessions
+  * Format is parseable JSONL
 
 ---
 
 ## Glossary / References
 
-* **ThreadPoolExecutor**: Python concurrent.futures for parallel execution
-* **Pause Detection**: Detecting gaps in speech to identify thought boundaries
-* **Auto-Complete Timeout**: 5-second rule for automatic thought completion
-* **Timing-Based Detection**: Using speech pauses instead of punctuation
-* **Discourse markers**: Words indicating continuation ("and", "but", "so")
-* **Conversational completeness**: Whether speaker has finished expressing their thought
-* **Mid-speech fragments**: Incomplete text captured during active speaking
+* **GroupingStrategy**: Abstract base class for different text grouping approaches
+* **Voice Cues**: Spoken commands that trigger actions ("new note", "discard that")
+* **Gatekeeper LLM**: Fast classifier for topic continuity
+* **Coherence LLM**: Quality check before storage
+* **JSONL**: JSON Lines format, one JSON object per line
 
 ---
 
