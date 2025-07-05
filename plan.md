@@ -41,8 +41,8 @@ Replace thought-level grouping with topic/time/voice-command based approach. Use
 
 ### 🔄 Milestone 3 – Knowledge Storage Abstraction (IN PROGRESS)
 * [ ] **Phase 7** – Knowledge Storage Abstraction Layer
-  * [ ] **Phase 7-explore** – Exploration: Understand Graphiti's Actual Behavior
-  * [ ] **Phase 7a** – Design KnowledgeStore Interface (After Exploration)
+  * [x] **Phase 7-explore** – Exploration: Understand Graphiti's Actual Behavior ✅
+  * [ ] **Phase 7a** – Design KnowledgeStore Interface (Based on Validated Findings)
   * [ ] **Phase 7b** – Implement GraphitiKnowledgeStore Driver
   * [ ] **Phase 7c** – Test Abstraction Independently
   * **Success Criteria**: Working abstraction with Graphiti backend, tested independently
@@ -214,8 +214,8 @@ Initial analysis revealed a **fundamental mismatch** between our abstraction des
 - **Graphiti reality**: Search returns facts/relationships (EntityEdges) between entities
 - **The issue**: Trying to map relationship edges to content entries doesn't align
 
-#### Implementation Steps
-* [ ] Create explore_graphiti.py test script that:
+#### Implementation Steps ✅
+* [x] Create explore_graphiti.py test script that:
   - Adds a voice transcription as an episode
   - Shows what entities and facts Graphiti extracts
   - Tests basic search() which returns EntityEdges (facts)
@@ -223,53 +223,110 @@ Initial analysis revealed a **fundamental mismatch** between our abstraction des
   - Tests retrieve_episodes() to get episodes by date
   - Documents the relationship between episodes, entities, and facts
 
-* [ ] Run exploration script and document findings:
-  - How are episodes stored vs how are they retrieved?
-  - What does search actually return?
-  - How to get back the original episode content?
-  - What's the relationship between episodes, nodes, and edges?
+* [x] Run exploration script and document findings:
+  - Episodes stored with full content, retrieved by UUID or date range
+  - Search returns EntityEdges (facts), NOT episodes
+  - Get episodes via retrieve_episodes() or EpisodicNode.get_by_uuids()
+  - Facts link to episodes via episode_ids array
 
-* [ ] Test edge cases:
-  - Empty transcriptions
-  - Very long transcriptions
-  - Multiple episodes with overlapping entities
-  - Time-based retrieval
+* [x] Test edge cases:
+  - Empty transcriptions rejected with validation error
+  - Short transcriptions ("Hello world") create minimal entities, no facts
+  - Multiple episodes successfully share entities (deduplication confirmed)
+  - Search with no matches returns empty list (no error)
 
-#### Expected Learnings
-1. **Episode Storage**: How voice topics map to episodes
-2. **Entity Extraction**: What entities Graphiti extracts from transcriptions
-3. **Fact Generation**: What facts/relationships are created
-4. **Search Behavior**: What search actually returns (edges vs episodes)
-5. **Retrieval Options**: Best way to get back stored transcriptions
+#### Actual Findings from Exploration
+1. **Episode Storage**: 
+   - Voice transcriptions stored as Episodes with complete content preserved
+   - Each episode gets UUID, name, timestamp, and entity_edges references
+   - Example: "Voice Topic 2025-01-05 14:30:00" stored successfully
 
-#### Success Criteria
-* Clear understanding of Graphiti's data model
-* Documented mapping between our needs and Graphiti's capabilities
-* Informed decision on abstraction design
+2. **Entity Extraction**: 
+   - From our test: 9 entities extracted (Sarah, John, project timeline, etc.)
+   - Entities are deduplicated across episodes
+   - Each entity gets UUID and name
 
-### Phase 7a – Design KnowledgeStore Interface
+3. **Fact Generation**: 
+   - 5 facts extracted from test transcript
+   - Facts are EntityEdges with: fact text, source/target UUIDs, valid_at timestamp
+   - Example: "Sarah will be joining the team as our new ML engineer"
 
-#### Design Considerations (Based on Exploration)
-After exploring Graphiti, we discovered important distinctions:
-1. **Episodes** = Stored content (what we add)
-2. **EntityEdges** = Extracted facts/relationships (what search returns)
-3. **EntityNodes** = Extracted entities (people, concepts, etc.)
+4. **Search Behavior** (Critical Finding):
+   - `search()` returns list of EntityEdges, NOT episodes or content
+   - EntityEdges don't have source_node/target_node objects, only UUIDs
+   - `search_()` returns SearchResults but nodes/episodes often empty
+   - Must use episode_ids from facts to retrieve original content
 
-Our abstraction needs to handle this dual nature:
-- **Storage**: We store voice transcriptions as episodes
-- **Search**: We get back facts extracted from those episodes
-- **Retrieval**: We may want to get back original episodes OR facts
+5. **Retrieval Options**:
+   - `retrieve_episodes()` - Get episodes by date range and group_id
+   - `EpisodicNode.get_by_uuids()` - Get specific episodes by UUID
+   - No direct content search - only fact search
 
-#### Proposed Abstraction Design (To Be Validated)
-The abstraction should distinguish between:
-- **KnowledgeEntry**: Maps to Episodes (stored content)
-- **KnowledgeFact**: Maps to EntityEdges (extracted facts)
-- **SearchResult**: Can contain both entries and facts
+6. **Edge Case Behavior**:
+   - Empty transcriptions are rejected with validation error
+   - Short transcriptions ("Hello world") create minimal entities, no facts
+   - Multiple episodes successfully share entities (deduplication confirmed)
+   - Search with no matches returns empty list (no error)
 
-This allows backends to:
-- Simple backends: Just store/retrieve entries (no fact extraction)
-- Advanced backends: Extract and search facts like Graphiti
-- Hybrid approaches: Some fact extraction without full graph
+#### Environment Configuration Requirements
+* **Neo4j Setup**: Must have Neo4j running (docker-compose up)
+* **Environment Variables**: 
+  - `DEFAULT_DATABASE=neo4j` (critical for Graphiti)
+  - `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD` for connection
+  - `OPENAI_API_KEY` for entity/fact extraction
+* **Initialization**: Must call `build_indices_and_constraints()` once
+
+#### Key Implementation Insights from Exploration
+* **Dual Model**: Store content as episodes, search returns facts as edges
+* **Indirection**: Search → Facts → episode_ids → retrieve episodes → content
+* **Abstraction Design**: Must handle both content storage and fact retrieval
+* **EntityEdge objects**: In search results lack populated source/target nodes
+* **Episode IDs**: In facts are arrays (can reference multiple episodes)
+* **Search optimization**: Primarily for fact retrieval, not content search
+
+### Phase 7a – Design KnowledgeStore Interface (Based on Validated Findings)
+
+#### Validated Design from Exploration
+Our exploration confirmed Graphiti's dual storage model:
+1. **Episodes** = Stored voice transcriptions (complete content)
+2. **EntityEdges** = Extracted facts that search returns
+3. **Indirection** = Facts contain episode_ids to find original content
+
+#### Key Design Constraints from Testing
+- EntityEdge objects in search results lack populated source/target nodes
+- Episode IDs in facts are arrays (can reference multiple episodes)
+- Search primarily optimized for fact retrieval, not content search
+- Must handle async operations throughout the stack
+
+#### Abstraction Design
+Based on our findings, the abstraction must support:
+
+**Data Models**:
+- **KnowledgeEntry**: Maps to Episodes (voice transcriptions)
+  - id: Episode UUID
+  - content: Full transcription text
+  - timestamp: When recorded
+  - metadata: Duration, voice cues, etc.
+  - extracted_facts: List of facts found in this entry
+
+- **KnowledgeFact**: Maps to EntityEdges (extracted relationships)
+  - id: Edge UUID
+  - fact: The extracted statement
+  - source_entity: Name (not UUID) for readability
+  - target_entity: Optional related entity
+  - episode_ids: Which entries this fact came from
+  - valid_at: When fact became true
+
+- **SearchResult**: Container for search results
+  - facts: List of KnowledgeFact objects
+  - entries: List of KnowledgeEntry objects (may be empty)
+  - Can return facts without entries (common case)
+
+**Key Design Decisions**:
+1. Search primarily returns facts, not original content
+2. Must provide episode retrieval separate from search
+3. Support backends that only do storage (no fact extraction)
+4. Handle Graphiti's UUID-only references gracefully
 
 #### Implementation Steps
 * [ ] Create knowledge_store.py with abstract base class defining:
