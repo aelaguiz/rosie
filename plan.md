@@ -41,7 +41,8 @@ Replace thought-level grouping with topic/time/voice-command based approach. Use
 
 ### 🔄 Milestone 3 – Knowledge Storage Abstraction (IN PROGRESS)
 * [ ] **Phase 7** – Knowledge Storage Abstraction Layer
-  * [ ] **Phase 7a** – Design KnowledgeStore Interface
+  * [ ] **Phase 7-explore** – Exploration: Understand Graphiti's Actual Behavior
+  * [ ] **Phase 7a** – Design KnowledgeStore Interface (After Exploration)
   * [ ] **Phase 7b** – Implement GraphitiKnowledgeStore Driver
   * [ ] **Phase 7c** – Test Abstraction Independently
   * **Success Criteria**: Working abstraction with Graphiti backend, tested independently
@@ -205,75 +206,79 @@ async def _check_for_commands(self, text: str) -> Optional[str]:
 - Error handling built-in
 - Configuration via environment variables
 
-### Phase 7a – Design KnowledgeStore Interface
+### Phase 7-explore – Exploration: Understand Graphiti's Actual Behavior
+
+#### Why Exploration First?
+Initial analysis revealed a **fundamental mismatch** between our abstraction design and Graphiti's data model:
+- **Our assumption**: Search returns stored content entries (like documents)
+- **Graphiti reality**: Search returns facts/relationships (EntityEdges) between entities
+- **The issue**: Trying to map relationship edges to content entries doesn't align
 
 #### Implementation Steps
-* [ ] Create knowledge_store.py with abstract base class:
-  ```python
-  from abc import ABC, abstractmethod
-  from typing import List, Dict, Any, Optional
-  from datetime import datetime
-  from dataclasses import dataclass
-  
-  @dataclass
-  class KnowledgeEntry:
-      """Backend-agnostic knowledge entry"""
-      id: Optional[str] = None
-      content: str = ""
-      timestamp: datetime = None
-      metadata: Dict[str, Any] = None
-      group_id: str = "default"
-  
-  @dataclass
-  class SearchResult:
-      """Backend-agnostic search result"""
-      entry: KnowledgeEntry
-      score: float = 1.0
-      facts: List[str] = None
-      relationships: List[Dict[str, Any]] = None
-  
-  class KnowledgeStore(ABC):
-      """Abstract interface for knowledge storage backends"""
-      
-      @abstractmethod
-      async def initialize(self) -> None:
-          """Initialize the storage backend"""
-          pass
-      
-      @abstractmethod
-      async def add_entry(self, entry: KnowledgeEntry) -> str:
-          """Add a knowledge entry and return its ID"""
-          pass
-      
-      @abstractmethod
-      async def search(self, query: str, limit: int = 10, 
-                      group_id: Optional[str] = None) -> List[SearchResult]:
-          """Search for relevant entries"""
-          pass
-      
-      @abstractmethod
-      async def get_entry(self, entry_id: str) -> Optional[KnowledgeEntry]:
-          """Retrieve a specific entry by ID"""
-          pass
-      
-      @abstractmethod
-      async def close(self) -> None:
-          """Clean up resources"""
-          pass
-  ```
+* [ ] Create explore_graphiti.py test script that:
+  - Adds a voice transcription as an episode
+  - Shows what entities and facts Graphiti extracts
+  - Tests basic search() which returns EntityEdges (facts)
+  - Tests advanced search_() which returns SearchResults with edges, nodes, episodes
+  - Tests retrieve_episodes() to get episodes by date
+  - Documents the relationship between episodes, entities, and facts
 
-* [ ] Create factory function for backend selection:
-  ```python
-  def create_knowledge_store(backend: str = None) -> KnowledgeStore:
-      """Factory to create appropriate knowledge store backend"""
-      backend = backend or os.getenv('KNOWLEDGE_BACKEND', 'graphiti')
-      
-      if backend == 'graphiti':
-          from .graphiti_store import GraphitiKnowledgeStore
-          return GraphitiKnowledgeStore()
-      else:
-          raise ValueError(f"Unknown backend: {backend}")
-  ```
+* [ ] Run exploration script and document findings:
+  - How are episodes stored vs how are they retrieved?
+  - What does search actually return?
+  - How to get back the original episode content?
+  - What's the relationship between episodes, nodes, and edges?
+
+* [ ] Test edge cases:
+  - Empty transcriptions
+  - Very long transcriptions
+  - Multiple episodes with overlapping entities
+  - Time-based retrieval
+
+#### Expected Learnings
+1. **Episode Storage**: How voice topics map to episodes
+2. **Entity Extraction**: What entities Graphiti extracts from transcriptions
+3. **Fact Generation**: What facts/relationships are created
+4. **Search Behavior**: What search actually returns (edges vs episodes)
+5. **Retrieval Options**: Best way to get back stored transcriptions
+
+#### Success Criteria
+* Clear understanding of Graphiti's data model
+* Documented mapping between our needs and Graphiti's capabilities
+* Informed decision on abstraction design
+
+### Phase 7a – Design KnowledgeStore Interface
+
+#### Design Considerations (Based on Exploration)
+After exploring Graphiti, we discovered important distinctions:
+1. **Episodes** = Stored content (what we add)
+2. **EntityEdges** = Extracted facts/relationships (what search returns)
+3. **EntityNodes** = Extracted entities (people, concepts, etc.)
+
+Our abstraction needs to handle this dual nature:
+- **Storage**: We store voice transcriptions as episodes
+- **Search**: We get back facts extracted from those episodes
+- **Retrieval**: We may want to get back original episodes OR facts
+
+#### Proposed Abstraction Design (To Be Validated)
+The abstraction should distinguish between:
+- **KnowledgeEntry**: Maps to Episodes (stored content)
+- **KnowledgeFact**: Maps to EntityEdges (extracted facts)
+- **SearchResult**: Can contain both entries and facts
+
+This allows backends to:
+- Simple backends: Just store/retrieve entries (no fact extraction)
+- Advanced backends: Extract and search facts like Graphiti
+- Hybrid approaches: Some fact extraction without full graph
+
+#### Implementation Steps
+* [ ] Create knowledge_store.py with abstract base class defining:
+  - KnowledgeEntry dataclass (stored content like voice transcriptions)
+  - KnowledgeFact dataclass (extracted facts/relationships)
+  - SearchResult dataclass (can contain both entries and facts)
+  - KnowledgeStore ABC with methods: initialize, add_entry, search, get_entry, close
+  
+* [ ] Create factory function for backend selection based on KNOWLEDGE_BACKEND env var
 
 #### Test Plan
 * Verify abstract methods are properly defined
@@ -284,101 +289,15 @@ async def _check_for_commands(self, text: str) -> Optional[str]:
 
 #### Implementation Steps
 * [ ] Create graphiti_store.py implementing the KnowledgeStore interface:
-  ```python
-  import os
-  import logging
-  from typing import List, Optional
-  from graphiti_core import Graphiti
-  from graphiti_core.nodes import EpisodeType
-  from .knowledge_store import KnowledgeStore, KnowledgeEntry, SearchResult
+  - Initialize Graphiti with Neo4j connection from env vars
+  - add_entry() stores voice transcriptions as Graphiti episodes
+  - search() uses search_() method to get both facts and episodes
+  - Converts Graphiti's EntityEdges to KnowledgeFact objects
+  - Converts Episodes to KnowledgeEntry objects
+  - Returns SearchResult containing both facts and entries
   
-  logger = logging.getLogger(__name__)
-  
-  class GraphitiKnowledgeStore(KnowledgeStore):
-      """Graphiti backend for knowledge storage"""
-      
-      def __init__(self):
-          self.graphiti = None
-          self.group_id = "voice_transcriptions"
-      
-      async def initialize(self) -> None:
-          """Initialize Graphiti client and Neo4j indices"""
-          self.graphiti = Graphiti(
-              uri=os.getenv('NEO4J_URI', 'bolt://localhost:7687'),
-              user=os.getenv('NEO4J_USER', 'neo4j'),
-              password=os.getenv('NEO4J_PASSWORD', 'rosie_local_password')
-          )
-          # Build indices (only needs to run once)
-          await self.graphiti.build_indices_and_constraints()
-          logger.info("Graphiti knowledge store initialized")
-      
-      async def add_entry(self, entry: KnowledgeEntry) -> str:
-          """Add entry as Graphiti episode"""
-          try:
-              result = await self.graphiti.add_episode(
-                  name=f"Voice Topic {entry.timestamp.strftime('%Y-%m-%d %H:%M:%S')}",
-                  episode_body=entry.content,
-                  source=EpisodeType.text,
-                  source_description="voice transcription topic",
-                  reference_time=entry.timestamp,
-                  group_id=entry.group_id or self.group_id
-              )
-              return result.episode.uuid
-          except Exception as e:
-              logger.error(f"Failed to add entry to Graphiti: {e}")
-              raise
-      
-      async def search(self, query: str, limit: int = 10,
-                      group_id: Optional[str] = None) -> List[SearchResult]:
-          """Search using Graphiti's hybrid search"""
-          try:
-              edges = await self.graphiti.search(
-                  query=query,
-                  group_ids=[group_id or self.group_id],
-                  num_results=limit
-              )
-              
-              results = []
-              for edge in edges:
-                  # Convert Graphiti edge to our SearchResult
-                  entry = KnowledgeEntry(
-                      id=edge.source_node_uuid,
-                      content=edge.source_node.name,
-                      timestamp=edge.valid_at,
-                      group_id=group_id or self.group_id
-                  )
-                  result = SearchResult(
-                      entry=entry,
-                      score=1.0,  # Graphiti doesn't expose scores
-                      facts=[edge.fact],
-                      relationships=[{
-                          "type": "relates_to",
-                          "target": edge.target_node.name if edge.target_node else None
-                      }]
-                  )
-                  results.append(result)
-              
-              return results
-          except Exception as e:
-              logger.error(f"Search failed: {e}")
-              return []
-      
-      async def get_entry(self, entry_id: str) -> Optional[KnowledgeEntry]:
-          """Retrieve specific episode by UUID"""
-          # Graphiti doesn't have a direct get_episode method
-          # Would need to implement using Neo4j query
-          logger.warning("get_entry not fully implemented for Graphiti")
-          return None
-      
-      async def close(self) -> None:
-          """Close Graphiti connection"""
-          if self.graphiti and hasattr(self.graphiti.driver, 'close'):
-              await self.graphiti.driver.close()
-  ```
-
 * [ ] Add graphiti-core to requirements.txt
-* [ ] Add error handling and retry logic
-* [ ] Configure logging for debugging
+* [ ] Handle the dual nature of Graphiti's returns (facts vs content)
 
 #### Test Plan
 * Unit tests mocking Graphiti client
@@ -392,97 +311,18 @@ async def _check_for_commands(self, text: str) -> Optional[str]:
 ### Phase 7c – Test Abstraction Independently
 
 #### Implementation Steps
-* [ ] Create test_knowledge_store.py:
-  ```python
-  import asyncio
-  import pytest
-  from datetime import datetime
-  from knowledge_store import KnowledgeEntry, create_knowledge_store
-  
-  @pytest.mark.asyncio
-  async def test_graphiti_store_lifecycle():
-      """Test basic lifecycle of Graphiti knowledge store"""
-      # Create store
-      store = create_knowledge_store('graphiti')
-      
-      # Initialize
-      await store.initialize()
-      
-      # Add entry
-      entry = KnowledgeEntry(
-          content="This is a test topic about project planning",
-          timestamp=datetime.now(),
-          metadata={"source": "test"},
-          group_id="test_group"
-      )
-      entry_id = await store.add_entry(entry)
-      assert entry_id is not None
-      
-      # Search for it
-      results = await store.search("project planning", limit=5)
-      assert len(results) > 0
-      assert "project" in results[0].entry.content.lower()
-      
-      # Clean up
-      await store.close()
-  
-  async def main():
-      """Manual test script"""
-      print("Testing Knowledge Store Abstraction...")
-      
-      # Test with Neo4j running
-      store = create_knowledge_store('graphiti')
-      try:
-          await store.initialize()
-          print("✓ Store initialized")
-          
-          # Add test entries
-          for i in range(3):
-              entry = KnowledgeEntry(
-                  content=f"Test topic {i}: Discussion about AI and machine learning",
-                  timestamp=datetime.now(),
-                  metadata={"test_id": i}
-              )
-              entry_id = await store.add_entry(entry)
-              print(f"✓ Added entry {i}: {entry_id}")
-          
-          # Search test
-          results = await store.search("machine learning", limit=10)
-          print(f"✓ Found {len(results)} results")
-          for r in results:
-              print(f"  - {r.entry.content[:50]}...")
-              if r.facts:
-                  print(f"    Facts: {r.facts}")
-      
-      finally:
-          await store.close()
-          print("✓ Store closed")
-  
-  if __name__ == "__main__":
-      asyncio.run(main())
-  ```
+* [ ] Create test_knowledge_store.py that:
+  - Tests the abstraction lifecycle (initialize, add, search, close)
+  - Adds test voice transcription entries
+  - Searches and verifies results contain both facts and entries
+  - Tests with real Neo4j/Graphiti backend
+  - Provides manual test script for debugging
 
 * [ ] Create mock_knowledge_store.py for testing without Neo4j:
-  ```python
-  class MockKnowledgeStore(KnowledgeStore):
-      """In-memory mock for testing"""
-      def __init__(self):
-          self.entries = {}
-          self.counter = 0
-      
-      async def initialize(self):
-          pass
-      
-      async def add_entry(self, entry):
-          self.counter += 1
-          entry_id = f"mock_{self.counter}"
-          self.entries[entry_id] = entry
-          return entry_id
-      
-      # ... implement other methods
-  ```
-
-* [ ] Add to factory function for testing
+  - In-memory storage for unit tests
+  - Implements same KnowledgeStore interface
+  - No fact extraction (simple backend example)
+  - Add to factory function as 'mock' backend
 
 #### Test Plan
 * Run test script with Neo4j running
@@ -527,89 +367,30 @@ services:
 ### Phase 8a – Initialize Knowledge Store in complete_thoughts.py
 
 #### Implementation Steps
-* [ ] Add knowledge store imports:
-  ```python
-  from knowledge_store import create_knowledge_store, KnowledgeEntry
-  ```
-
-* [ ] Initialize store on startup:
-  ```python
-  # Global knowledge store instance
-  knowledge_store = None
-  
-  async def init_knowledge_store():
-      """Initialize knowledge store on startup"""
-      global knowledge_store
-      try:
-          knowledge_store = create_knowledge_store()
-          await knowledge_store.initialize()
-          logger.info("Knowledge store initialized successfully")
-      except Exception as e:
-          logger.error(f"Failed to initialize knowledge store: {e}")
-          # Continue without storage if it fails
-          knowledge_store = None
-  ```
-
-* [ ] Update main() to initialize store:
-  ```python
-  def main():
-      # ... existing setup ...
-      
-      # Initialize knowledge store
-      if asyncio.get_event_loop().is_running():
-          asyncio.create_task(init_knowledge_store())
-      else:
-          asyncio.run(init_knowledge_store())
-      
-      # ... rest of main
-  ```
+* [ ] Add knowledge store imports from our abstraction
+* [ ] Create async init_knowledge_store() function that:
+  - Creates store using factory function
+  - Initializes the backend (Neo4j for Graphiti)
+  - Handles failures gracefully (app continues without storage)
+* [ ] Update main() to call init_knowledge_store on startup
+* [ ] Handle async initialization properly
 
 ### Phase 8b – Store Topics Using Abstraction
 
 #### Implementation Steps
 * [ ] Update handle_complete_group to use abstraction:
-  ```python
-  async def handle_complete_group(strategy, text, metadata):
-      """Handle complete group detection via callback"""
-      # ... existing console output ...
-      
-      # Store in knowledge store if available
-      if knowledge_store and text.strip():
-          try:
-              entry = KnowledgeEntry(
-                  content=text,
-                  timestamp=metadata.get('start_ts', datetime.now()),
-                  metadata={
-                      'voice_cue_flags': metadata.get('voice_cue_flags', []),
-                      'duration_seconds': metadata.get('duration_seconds', 0),
-                      'word_count': len(text.split()),
-                      'type': metadata.get('type', 'topic')
-                  },
-                  group_id="voice_transcriptions"
-              )
-              entry_id = await knowledge_store.add_entry(entry)
-              logger.info(f"Stored knowledge entry: {entry_id}")
-          except Exception as e:
-              logger.error(f"Failed to store in knowledge base: {e}")
-              # Don't fail the whole process if storage fails
-  ```
+  - Create KnowledgeEntry from completed topic
+  - Include metadata (duration, voice cues, word count)
+  - Call knowledge_store.add_entry() if available
+  - Log success/failure but don't crash on storage errors
 
 * [ ] Handle async callbacks properly:
-  ```python
-  # Wrapper to handle async callback from sync context
-  def handle_group_complete_wrapper(strategy, text, metadata):
-      if asyncio.get_event_loop().is_running():
-          asyncio.create_task(handle_complete_group(strategy, text, metadata))
-      else:
-          asyncio.run(handle_complete_group(strategy, text, metadata))
-  ```
+  - Create wrapper to handle async callback from sync context
+  - Use asyncio.create_task or asyncio.run as appropriate
 
 * [ ] Add graceful shutdown:
-  ```python
-  # In KeyboardInterrupt handler
-  if knowledge_store:
-      await knowledge_store.close()
-  ```
+  - Close knowledge store on KeyboardInterrupt
+  - Clean up resources properly
 
 #### Test Plan
 * Start complete_thoughts.py with Neo4j running
@@ -635,121 +416,35 @@ Create a CLI tool to search and retrieve stored voice transcription topics using
 
 #### Create query_knowledge.py
 * [ ] Basic structure with argparse:
-  ```python
-  #!/usr/bin/env python3
-  """Query stored voice transcription topics from knowledge store"""
-  
-  import argparse
-  import asyncio
-  import os
-  from datetime import datetime
-  from dotenv import load_dotenv
-  from knowledge_store import create_knowledge_store
-  
-  load_dotenv()
-  
-  async def search_topics(query: str, limit: int = 10, 
-                         from_date: datetime = None, to_date: datetime = None):
-      """Search for topics in the knowledge store"""
-      # Create and initialize store
-      store = create_knowledge_store()
-      await store.initialize()
-      
-      try:
-          # Search using abstraction
-          results = await store.search(
-              query=query,
-              limit=limit,
-              group_id="voice_transcriptions"
-          )
-          
-          # Filter by date if provided
-          if from_date or to_date:
-              filtered = []
-              for result in results:
-                  timestamp = result.entry.timestamp
-                  if from_date and timestamp < from_date:
-                      continue
-                  if to_date and timestamp > to_date:
-                      continue
-                  filtered.append(result)
-              results = filtered
-          
-          return results
-      finally:
-          await store.close()
-  ```
+  - Create and initialize knowledge store
+  - Search using the abstraction
+  - Handle both entries and facts in results
+  - Support date filtering and result limits
+  - Close store properly after use
 
 * [ ] Add CLI argument parsing:
-  ```python
-  parser = argparse.ArgumentParser(description='Query voice transcription topics')
-  parser.add_argument('query', help='Search query')
-  parser.add_argument('--limit', type=int, default=10, help='Max results')
-  parser.add_argument('--from-date', type=str, help='Start date (YYYY-MM-DD)')
-  parser.add_argument('--to-date', type=str, help='End date (YYYY-MM-DD)')
-  parser.add_argument('--show-facts', action='store_true', 
-                      help='Show extracted facts and relationships')
-  ```
+  - Query string (required)
+  - --limit for max results
+  - --from-date and --to-date for filtering
+  - --show-facts to display extracted facts
+  - --backend to override default backend
 
 * [ ] Format and display results:
-  ```python
-  def display_results(results):
-      """Display search results in readable format"""
-      if not results:
-          print("No results found.")
-          return
-      
-      print(f"\nFound {len(results)} results:\n")
-      
-      for i, result in enumerate(results, 1):
-          entry = result.entry
-          print(f"[{i}] Voice Topic {entry.timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
-          print(f"    Content: {entry.content[:100]}...")
-          
-          if result.facts:
-              print(f"    Facts: {', '.join(result.facts[:3])}")
-          
-          if result.relationships:
-              for rel in result.relationships[:2]:
-                  if rel.get('target'):
-                      print(f"    Related to: {rel['target']}")
-          
-          if entry.metadata:
-              duration = entry.metadata.get('duration_seconds', 0)
-              if duration:
-                  print(f"    Duration: {duration:.1f}s")
-          
-          print("-" * 60)
-  ```
+  - Show entries (original voice topics) if available
+  - Show facts extracted from topics if available
+  - Display metadata like duration and timestamps
+  - Handle mixed results gracefully
 
 ### Advanced Features
 * [ ] Add backend-specific features:
-  ```python
-  # Some features may be backend-specific
-  # For example, Graphiti supports center node search
-  if args.backend_features and hasattr(store, 'search_contextual'):
-      # Use backend-specific advanced search if available
-      results = await store.search_contextual(query, context_id=args.context)
-  ```
+  - Allow backends to expose additional search methods
+  - Graphiti might support contextual search or graph traversal
+  - Simple backends might only support basic text search
 
 * [ ] Add export functionality:
-  ```python
-  if args.export:
-      # Export results to JSON or CSV
-      import json
-      export_data = []
-      for result in results:
-          export_data.append({
-              'timestamp': result.entry.timestamp.isoformat(),
-              'content': result.entry.content,
-              'facts': result.facts,
-              'metadata': result.entry.metadata
-          })
-      
-      with open(args.export, 'w') as f:
-          json.dump(export_data, f, indent=2)
-      print(f"Exported {len(results)} results to {args.export}")
-  ```
+  - Export results to JSON for further analysis
+  - Include both entries and facts in export
+  - Support CSV export for simpler analysis
 
 ### Example Usage
 ```bash
