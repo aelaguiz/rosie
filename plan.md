@@ -41,7 +41,7 @@ Only elegant, complete solutions that fully embody our principles count as succe
 > **🔜 NEXT STEPS:** *Phase 3 - Stability & Continuation Handling*
 
 ## Executive Summary
-> Fix three critical issues in thought detection: 1) Premature detection of incomplete thoughts that happen to be grammatically complete, 2) Single-threaded LLM processing causing bottlenecks, and 3) Speech recognizer adding punctuation mid-speech causing false positives. Solution uses conservative detection prompts, ThreadPoolExecutor for parallel processing, and stability confirmation windows.
+> Fix three critical issues in thought detection: 1) System incorrectly relying on punctuation that doesn't exist in real-time transcription, 2) Single-threaded LLM processing causing bottlenecks, and 3) Analyzing mid-speech fragments instead of waiting for natural pauses. Solution uses timing-based detection with pause thresholds, ThreadPoolExecutor for parallel processing, and conversational completeness focus.
 
 ## Architecture Snapshot – Before vs. After
 ### On-Disk Layout
@@ -55,8 +55,8 @@ Only elegant, complete solutions that fully embody our principles count as succe
 |                | **Before** | **After** |
 | -------------- | ---------- | --------- |
 | Processing | Sequential queue processing | Parallel future-based processing |
-| Detection | Grammatical completeness | Conversational completeness |
-| Debouncing | None | 500ms stability window |
+| Detection | Punctuation-based | Timing & content-based |
+| Timing | Immediate analysis | 0.5s pause + 5s auto-complete |
 
 ---
 
@@ -64,8 +64,8 @@ Only elegant, complete solutions that fully embody our principles count as succe
 * [ ] **Milestone 1 – Fix Thought Detection Issues** 🟡
   * [x] **Phase 1 – Conservative Detection** ✅ – Better prompt & threshold
   * [x] **Phase 2 – Parallel Processing** ✅ – ThreadPoolExecutor implementation
-  * [ ] **Phase 3 – Stability & Continuation Handling** ⬜ – Stability window and premature punctuation handling
-  * **Success Criteria**: No premature detection, 3x faster processing
+  * [ ] **Phase 3 – Timing-Based Detection & Auto-Complete** ⬜ – Pause detection and 5s timeout
+  * **Success Criteria**: Timing-based detection working, no punctuation dependency, 3x faster processing
 
 ---
 
@@ -80,9 +80,10 @@ Only elegant, complete solutions that fully embody our principles count as succe
 
 ## Target Output API (if applicable)
 ```python
-# Same API, better behavior
-detector.process_text("I went to the store") # Returns None (incomplete)
-detector.process_text("I went to the store yesterday.") # Returns complete thought
+# Same API, better behavior - no punctuation dependency
+detector.process_text("I went to the store") # Returns None (trails off, incomplete)
+detector.process_text("I went to the store yesterday") # Returns complete thought (after 0.5s pause)
+# After 5 seconds of silence, any text becomes complete automatically
 ```
 
 ---
@@ -96,21 +97,21 @@ detector.process_text("I went to the store yesterday.") # Returns complete thoug
 * **Implementation Steps**
 
   * [x] Update system prompt to emphasize conversational vs grammatical completeness
-  * [x] Add examples: "I went to the store" (incomplete) vs "I went to the store." (complete)
+  * [x] Rewrite prompt to focus on conversational thought completion
+  * [x] Remove ALL punctuation dependencies from examples and logic
   * [x] Include discourse markers as incompleteness signals ("and", "but", "so" at end)
   * [x] Increase confidence threshold from 0.7 to 0.8
-  * [x] Add punctuation weight to detection logic
 
 * **Test Plan**
 
   * [x] Test sentences that are grammatically complete but likely to continue
-  * [x] Verify period vs no period makes a difference
   * [x] Test with common speech patterns that pause mid-thought
+  * [x] Verify examples work without any punctuation
 
 * **Success / Acceptance Criteria**
 
-  * [x] "I went to the store" -> Not detected as complete
-  * [x] "I went to the store." -> Detected as complete
+  * [x] "I went to the store" -> Not detected as complete (trails off)
+  * [x] "I went to the store yesterday" -> Detected as complete (full idea)
   * [x] Natural speech pauses don't trigger false positives
 
 #### Phase 2 – Parallel Processing ✅
@@ -135,50 +136,58 @@ detector.process_text("I went to the store yesterday.") # Returns complete thoug
   * [x] No dropped or duplicated results
   * [x] Maintains FIFO result order
 
-#### Phase 3 – Stability & Continuation Handling
+#### Phase 3 – Timing-Based Detection & Auto-Complete
 
 * **Implementation Steps**
 
-  * [ ] Add pending thought state tracking:
-    * `pending_thought`: Store detected complete thought
-    * `pending_timestamp`: When detection occurred
-    * `pending_result`: The analysis result
-  * [ ] Implement 500ms stability confirmation window
-  * [ ] Cancel pending thoughts if text continues growing
-  * [ ] Make stability window configurable via parameter
-  * [ ] Add debug output for cancelled/confirmed detections:
-    * "[DEBUG] Complete thought detected (pending): {text}"
-    * "[DEBUG] Pending thought cancelled - text continued"
-    * "[DEBUG] Complete thought confirmed after {ms}ms"
-  * [ ] Clean up abandoned futures and cancelled detections
+  * [ ] Add timing state tracking:
+    * `last_text_update_time`: Track when text last changed
+    * `pause_timer`: Timer for 0.5s pause detection
+    * `auto_complete_timer`: Timer for 5s auto-complete
+  * [ ] Implement pause detection mechanism:
+    * Only submit for analysis after 0.5+ seconds of no new text
+    * Cancel pending timers when new text arrives
+    * Prevent analysis of mid-speech fragments
+  * [ ] Add 5-second auto-complete rule:
+    * If no new text for 5+ seconds, mark as complete
+    * No LLM call needed for this case
+    * Immediate thought completion
+  * [ ] Create configurable timing parameters:
+    * `min_pause_before_analysis`: 0.5 seconds (default)
+    * `auto_complete_timeout`: 5.0 seconds (default)
+  * [ ] Add debug output for timing events:
+    * "[DEBUG] Text updated, resetting timers"
+    * "[DEBUG] 0.5s pause detected, submitting for analysis"
+    * "[DEBUG] 5s timeout reached, auto-completing thought"
 
 * **Test Plan**
 
-  * Test "Alright." → "Alright, this is..." cancellation
-  * Verify 500ms stability before display
-  * Rapid text updates within stability window
-  * Ensure genuine complete thoughts aren't delayed excessively
-  * Check memory cleanup of cancelled futures
+  * Test rapid speech with brief pauses < 0.5s
+  * Verify 0.5s pause triggers analysis
+  * Test 5s pause auto-completes without LLM
+  * Ensure mid-speech fragments aren't analyzed
+  * Test timer cancellation on new text
 
 * **Success / Acceptance Criteria**
 
-  * No premature thought display when speech continues
-  * Complete thoughts display after 500ms stability
-  * Clear debug trail for troubleshooting
-  * Reduces API calls by 50%+ during active speech
-  * Configurable stability window
-  * Handles speech recognizer's premature punctuation gracefully
+  * No analysis of mid-speech fragments
+  * Natural pauses (0.5s+) trigger thought detection
+  * Long pauses (5s+) always complete the thought
+  * 50%+ reduction in API calls
+  * Configurable timing thresholds
+  * Works with unpunctuated real-time transcription
 
 ---
 
 ## Glossary / References
 
 * **ThreadPoolExecutor**: Python concurrent.futures for parallel execution
-* **Debouncing**: Delay processing until input stabilizes
-* **Stability Window**: Time period to confirm a complete thought hasn't continued
-* **Pending Thought**: Complete thought awaiting stability confirmation
+* **Pause Detection**: Detecting gaps in speech to identify thought boundaries
+* **Auto-Complete Timeout**: 5-second rule for automatic thought completion
+* **Timing-Based Detection**: Using speech pauses instead of punctuation
 * **Discourse markers**: Words indicating continuation ("and", "but", "so")
-* **Conversational completeness**: Whether speaker has finished their turn
+* **Conversational completeness**: Whether speaker has finished expressing their thought
+* **Mid-speech fragments**: Incomplete text captured during active speaking
 
 ---
 

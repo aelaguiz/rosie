@@ -16,6 +16,7 @@ import litellm
 from litellm import completion
 from colorama import init, Fore, Style
 from dotenv import load_dotenv
+import string
 
 # Load environment variables from .env file
 load_dotenv()
@@ -43,16 +44,27 @@ class ThoughtAnalysis(BaseModel):
 class ThoughtCompletionDetector:
     """Detects complete thoughts in streaming text using GPT-4o mini with parallel processing"""
     
-    def __init__(self, model: str = "gpt-4o-mini", debug: bool = False, max_workers: int = 3):
+    def __init__(self, model: str = "gpt-4o-mini", debug: bool = False, max_workers: int = 3,
+                 min_pause_before_analysis: float = 0.5, auto_complete_timeout: float = 5.0,
+                 on_thought_complete=None):
         self.model = model
         self.debug = debug
         self.max_workers = max_workers
+        self.min_pause_before_analysis = min_pause_before_analysis
+        self.auto_complete_timeout = auto_complete_timeout
+        self.on_thought_complete = on_thought_complete
         self.text_buffer = ""
         self.executor = None
         self.running = False
         self.last_complete_thought = ""
         self.accumulated_partial = ""
         self.last_analyzed_text = ""  # Track what we last sent for analysis
+        
+        # Timing state
+        self.last_text_update_time = None
+        self.pause_timer = None
+        self.auto_complete_timer = None
+        self.pending_analysis_text = None
         
         # Track futures and their submission order
         self.pending_futures: Dict[Future, str] = {}  # Future -> text mapping
@@ -83,41 +95,40 @@ class ThoughtCompletionDetector:
             system_prompt = """You are a linguistic expert analyzing real-time speech transcription.
 Your task is to determine if the given text represents a CONVERSATIONALLY COMPLETE THOUGHT.
 
-CRITICAL: Focus on CONVERSATIONAL completeness, not just grammatical completeness. In natural speech, people often pause mid-thought even when a sentence could technically stand alone.
+CRITICAL: You are analyzing SPOKEN conversation, NOT written text. The text comes from real-time speech recognition and DOES NOT include punctuation. Focus on whether the speaker has finished expressing their current thought based on the CONTENT and NATURAL SPEECH PATTERNS.
 
-A thought is COMPLETE only when:
-- The speaker has clearly finished expressing their idea
-- There's strong punctuation (period, question mark, exclamation)
-- It's a clear, standalone response or statement
-- There's no expectation of immediate continuation
+A thought is COMPLETE when:
+- The speaker has expressed a full idea or statement
+- It's a complete response or reaction
+- The content feels finished and doesn't trail off
+- It expresses a complete sentiment or observation
 
-A thought is INCOMPLETE if:
-- It lacks ending punctuation (especially periods)
+A thought is INCOMPLETE when:
 - It ends with discourse markers ("and", "but", "so", "because", "or")
-- It sounds like the speaker paused mid-thought
-- It's grammatically complete but conversationally expects more
+- It's clearly a setup phrase expecting more content
+- It trails off without completing the idea
 - It ends with filler words (um, uh, like, you know)
-- The tone suggests continuation
+- The content suggests more is coming
 
-BE CONSERVATIVE: When in doubt, mark as INCOMPLETE. It's better to wait for more text than to prematurely cut off a thought.
+BE CONSERVATIVE: When in doubt, mark as INCOMPLETE. Natural speech has pauses - we want to detect when someone has finished their thought, not just paused briefly.
 
-Examples of COMPLETE thoughts:
-- "I went to the store yesterday." (has period, complete idea)
-- "What time is it?" (complete question with punctuation)
-- "That's amazing!" (complete exclamation)
-- "Yes." (complete response)
-- "The weather is nice today." (complete statement with period)
+Examples of COMPLETE thoughts (remember, NO PUNCTUATION):
+- "I went to the store yesterday" (complete story/idea)
+- "What time is it" (complete question)
+- "That's amazing" (complete reaction)
+- "Yes" (complete response)
+- "The weather is nice today" (complete observation)
 
-Examples of INCOMPLETE thoughts (even if grammatically valid):
-- "I went to the store" (no period, likely to continue)
+Examples of INCOMPLETE thoughts:
+- "I went to the store" (trails off, might continue)
 - "I went to the store and" (discourse marker at end)
-- "The weather is nice" (no period, may continue)
-- "What I mean is" (clearly expects continuation)
-- "One of the things about that is" (setup for more)
-- "So basically" (discourse marker, expects more)
+- "What I mean is" (setup phrase)
+- "One of the things about that is" (clearly expects more)
+- "So basically" (discourse marker)
 - "The thing is" (conversational setup)
+- "I was thinking maybe we could" (trails off mid-idea)
 
-PUNCTUATION MATTERS: Presence of a period, question mark, or exclamation point is a strong signal of completeness. Absence is a strong signal of incompleteness.
+REMEMBER: You're analyzing natural speech without punctuation. Focus on whether the thought/idea is complete, not grammar.
 
 You MUST respond with a JSON object containing exactly these fields:
 {
@@ -169,6 +180,9 @@ You MUST respond with a JSON object containing exactly these fields:
             # Add to result queue
             self.result_queue.put((text, result))
             
+            # Immediately check and notify
+            self._notify_thought_complete()
+            
         except Exception as e:
             if self.debug:
                 print(f"Future processing error for '{text}': {e}")
@@ -179,6 +193,89 @@ You MUST respond with a JSON object containing exactly these fields:
                 if future in self.pending_futures:
                     del self.pending_futures[future]
                     
+    def _cancel_timers(self):
+        """Cancel any pending timers"""
+        if self.pause_timer:
+            self.pause_timer.cancel()
+            self.pause_timer = None
+        if self.auto_complete_timer:
+            self.auto_complete_timer.cancel()
+            self.auto_complete_timer = None
+            
+    def _on_pause_detected(self):
+        """Called when pause threshold is reached"""
+        if self.debug:
+            print(f"[DEBUG] {self.min_pause_before_analysis}s pause detected, submitting for analysis: '{self.pending_analysis_text}'")
+        
+        # Submit for analysis
+        if self.pending_analysis_text and len(self.pending_analysis_text.strip()) >= 3:
+            # Check for backpressure
+            with self.futures_lock:
+                if len(self.pending_futures) >= self.max_workers:
+                    if self.debug:
+                        print(f"Skipping analysis: worker pool is full ({self.max_workers} pending tasks)")
+                    return
+            
+            # Submit analysis task
+            future = self.executor.submit(self._analyze_text, self.pending_analysis_text)
+            
+            # Track the future
+            with self.futures_lock:
+                self.pending_futures[future] = self.pending_analysis_text
+            
+            # Set up callback
+            future.add_done_callback(lambda f, t=self.pending_analysis_text: self._process_future_result(f, t))
+            
+            if self.debug:
+                print(f"Submitted analysis for '{self.pending_analysis_text}' (active tasks: {len(self.pending_futures)})")
+                
+    def _notify_thought_complete(self):
+        """Check result queue and notify callback if complete thought found"""
+        try:
+            while True:
+                text, result = self.result_queue.get_nowait()
+                
+                if result and result.is_complete and result.confidence > 0.8:
+                    # Strip trailing punctuation for comparison
+                    analyzed_stripped = text.rstrip(string.punctuation)
+                    accumulated_stripped = self.accumulated_partial.rstrip(string.punctuation)
+                    
+                    if analyzed_stripped == accumulated_stripped or accumulated_stripped.startswith(analyzed_stripped):
+                        complete_thought = text
+                        self.last_complete_thought = complete_thought
+                        # Reset for next thought
+                        self.accumulated_partial = ""
+                        self.last_analyzed_text = ""
+                        self.pending_analysis_text = None
+                        self._cancel_timers()
+                        
+                        # Notify via callback
+                        if self.on_thought_complete:
+                            self.on_thought_complete(complete_thought, result)
+                        
+        except queue.Empty:
+            pass
+                
+    def _on_auto_complete_timeout(self):
+        """Called when auto-complete timeout is reached"""
+        if self.debug:
+            print(f"[DEBUG] {self.auto_complete_timeout}s timeout reached, auto-completing thought: '{self.accumulated_partial}'")
+        
+        # Auto-complete the current text without LLM
+        if self.accumulated_partial:
+            # Create a fake analysis result
+            auto_result = ThoughtAnalysis(
+                is_complete=True,
+                confidence=1.0,
+                reasoning="Auto-completed due to long pause"
+            )
+            
+            # Add to result queue
+            self.result_queue.put((self.accumulated_partial, auto_result))
+            
+            # Immediately check and notify
+            self._notify_thought_complete()
+    
     def process_text(self, new_text: str) -> Optional[Tuple[str, ThoughtAnalysis]]:
         """
         Process new transcribed text and return complete thought if detected
@@ -187,49 +284,52 @@ You MUST respond with a JSON object containing exactly these fields:
             Tuple of (complete_thought_text, analysis) if a complete thought is detected
             None otherwise
         """
-        # RealtimeSTT sends the full accumulated text each time
-        self.accumulated_partial = new_text
+        current_time = time.time()
         
-        # Only analyze if text has grown (not shortened or same)
-        if len(new_text) > len(self.last_analyzed_text):
-            self.last_analyzed_text = new_text
+        # Cancel any pending timers since we have new text
+        self._cancel_timers()
+        
+        # Update state
+        self.accumulated_partial = new_text
+        self.last_text_update_time = current_time
+        self.pending_analysis_text = new_text
+        
+        if self.debug:
+            print(f"[DEBUG] Text updated, resetting timers: '{new_text}'")
+        
+        # Only set up timers if we have meaningful text
+        if len(new_text.strip()) >= 3:
+            # Set up pause detection timer
+            self.pause_timer = threading.Timer(self.min_pause_before_analysis, self._on_pause_detected)
+            self.pause_timer.daemon = True
+            self.pause_timer.start()
             
-            # Skip if text is too short
-            if len(new_text.strip()) >= 3:
-                # Check for backpressure - limit pending tasks to prevent overload
-                with self.futures_lock:
-                    if len(self.pending_futures) >= self.max_workers:
-                        if self.debug:
-                            print(f"Skipping analysis for '{new_text}': worker pool is full ({self.max_workers} pending tasks)")
-                        return None
-                
-                # Submit analysis task to executor
-                future = self.executor.submit(self._analyze_text, new_text)
-                
-                # Track the future
-                with self.futures_lock:
-                    self.pending_futures[future] = new_text
-                
-                # Set up callback to process result when complete
-                # Use default argument to capture new_text value at lambda creation time
-                future.add_done_callback(lambda f, t=new_text: self._process_future_result(f, t))
-                
-                if self.debug:
-                    print(f"Submitted analysis for '{new_text}' (active tasks: {len(self.pending_futures)})")
+            # Set up auto-complete timer
+            self.auto_complete_timer = threading.Timer(self.auto_complete_timeout, self._on_auto_complete_timeout)
+            self.auto_complete_timer.daemon = True
+            self.auto_complete_timer.start()
         
         # Check for results (non-blocking)
         try:
             while True:
                 text, result = self.result_queue.get_nowait()
                 
-                # If this analysis is for current text and it's complete
-                if result and text == self.accumulated_partial and result.is_complete and result.confidence > 0.8:
-                    complete_thought = self.accumulated_partial
-                    self.last_complete_thought = complete_thought
-                    # Reset for next thought
-                    self.accumulated_partial = ""
-                    self.last_analyzed_text = ""
-                    return (complete_thought, result)
+                # If this analysis detected a complete thought
+                if result and result.is_complete and result.confidence > 0.8:
+                    # Strip trailing punctuation for comparison to handle RealtimeSTT's dynamic punctuation
+                    analyzed_stripped = text.rstrip(string.punctuation)
+                    accumulated_stripped = self.accumulated_partial.rstrip(string.punctuation)
+                    
+                    # Check if this is still relevant
+                    if analyzed_stripped == accumulated_stripped or accumulated_stripped.startswith(analyzed_stripped):
+                        complete_thought = text  # Use original text with punctuation
+                        self.last_complete_thought = complete_thought
+                        # Reset for next thought
+                        self.accumulated_partial = ""
+                        self.last_analyzed_text = ""
+                        self.pending_analysis_text = None
+                        self._cancel_timers()
+                        return (complete_thought, result)
                     
         except queue.Empty:
             pass
@@ -292,6 +392,10 @@ You MUST respond with a JSON object containing exactly these fields:
     def stop(self):
         """Stop the executor and clean up"""
         self.running = False
+        
+        # Cancel any pending timers
+        self._cancel_timers()
+        
         if self.executor:
             # Cancel pending futures
             with self.futures_lock:
