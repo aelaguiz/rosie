@@ -1,0 +1,35 @@
+# Docker Compose for Rosie Voice Transcription Development
+# Provides Neo4j for Graphiti knowledge graph storage
+
+services:
+  neo4j:
+    image: neo4j:5.26.2
+    container_name: rosie_neo4j
+    ports:
+      - "7474:7474"  # HTTP/Web interface
+      - "7687:7687"  # Bolt protocol
+    environment:
+      # Set default credentials for local development
+      - NEO4J_AUTH=neo4j/rosie_local_password
+      # Enable APOC procedures (useful for advanced graph operations)
+      - NEO4J_PLUGINS=["apoc"]
+    volumes:
+      # Persist data between container restarts
+      - ./neo4j_data:/data
+      - ./neo4j_logs:/logs
+      - ./neo4j_import:/var/lib/neo4j/import
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  neo4j_data:
+    driver: local
+  neo4j_logs:
+    driver: local
+  neo4j_import:
+    driver: local
