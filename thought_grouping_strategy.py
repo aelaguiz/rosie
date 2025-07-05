@@ -3,10 +3,15 @@
 Thought-based grouping strategy using the existing ThoughtCompletionDetector.
 """
 
+import os
 from typing import Optional, Callable, Any, Tuple
 from datetime import datetime
+from dotenv import load_dotenv
 from grouping_strategies import GroupingStrategy
 from thought_detector import ThoughtCompletionDetector, ThoughtAnalysis
+
+# Load environment variables
+load_dotenv()
 
 
 class ThoughtGroupingStrategy(GroupingStrategy):
@@ -15,7 +20,7 @@ class ThoughtGroupingStrategy(GroupingStrategy):
     def __init__(self, 
                  on_group_complete: Optional[Callable[[str, Any], None]] = None,
                  debug: bool = False,
-                 model: str = "gpt-4o-mini",
+                 model: str = None,
                  max_workers: int = 3,
                  min_pause_before_analysis: float = 0.5,
                  auto_complete_timeout: float = 5.0):
@@ -34,7 +39,7 @@ class ThoughtGroupingStrategy(GroupingStrategy):
         
         # Create wrapped detector with our callback
         self.detector = ThoughtCompletionDetector(
-            model=model,
+            model=model or os.getenv('THOUGHT_DETECTION_MODEL', 'gpt-4o-mini'),
             debug=debug,
             max_workers=max_workers,
             min_pause_before_analysis=min_pause_before_analysis,

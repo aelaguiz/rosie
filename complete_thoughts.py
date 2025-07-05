@@ -146,9 +146,9 @@ def main():
     parser = argparse.ArgumentParser(description='Complete thoughts speech-to-text with thought detection')
     parser.add_argument('--list', action='store_true', help='List all available microphones')
     parser.add_argument('--mic', type=int, help='Microphone device index to use')
-    parser.add_argument('--model', type=str, default='tiny', 
-                        help='Whisper model for final transcription (tiny, base, small, medium, large-v1, large-v2)')
-    parser.add_argument('--realtime-model', type=str, default=None,
+    parser.add_argument('--model', type=str, default=os.getenv('WHISPER_MODEL', 'tiny'), 
+                        help='Whisper model for final transcription (tiny, base, small, medium, large-v1, large-v2, large-v3)')
+    parser.add_argument('--realtime-model', type=str, default=os.getenv('WHISPER_REALTIME_MODEL'),
                         help='Whisper model for realtime transcription (defaults to same as --model)')
     parser.add_argument('--strategy', type=str, default='thought',
                         choices=['thought', 'topic'],

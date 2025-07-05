@@ -44,10 +44,10 @@ class ThoughtAnalysis(BaseModel):
 class ThoughtCompletionDetector:
     """Detects complete thoughts in streaming text using GPT-4o mini with parallel processing"""
     
-    def __init__(self, model: str = "gpt-4o-mini", debug: bool = False, max_workers: int = 3,
+    def __init__(self, model: str = None, debug: bool = False, max_workers: int = 3,
                  min_pause_before_analysis: float = 0.5, auto_complete_timeout: float = 5.0,
                  on_thought_complete=None):
-        self.model = model
+        self.model = model or os.getenv('THOUGHT_DETECTION_MODEL', 'gpt-4o-mini')
         self.debug = debug
         self.max_workers = max_workers
         self.min_pause_before_analysis = min_pause_before_analysis
