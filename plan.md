@@ -37,11 +37,11 @@ Only elegant, complete solutions that fully embody our principles count as succe
 ---
 
 ## 🚧 Implementation Status Banner
-> **🚀 CURRENT PHASE:** *Not Started*  
-> **🔜 NEXT STEPS:** *Milestone 1 – Phase 1 – Create Abstraction Layer*
+> **🚀 CURRENT PHASE:** *Phase 4 Complete*  
+> **🔜 NEXT STEPS:** *Milestone 2 – Phase 5 – Timing Controls*
 
 ## Executive Summary
-> Replace the current thought-level grouping with a topic/time/voice-cue based approach. This creates an abstraction layer allowing swappable grouping strategies, implements voice commands ("new note", "discard that"), and uses dual LLM checks for topic continuity and coherence. Storage is simple JSONL for MVP.
+> Replace the current thought-level grouping with a topic/time/voice-cue based approach. This creates an abstraction layer allowing swappable grouping strategies, implements voice commands ("new note", "discard that"), and uses triple LLM integration: voice cue intent classification, topic continuity, and coherence checks. Storage is simple JSONL for MVP.
 
 ## Architecture Snapshot – Before vs. After
 ### On-Disk Layout
@@ -55,9 +55,10 @@ Only elegant, complete solutions that fully embody our principles count as succe
 |                | **Before** | **After** |
 | -------------- | ---------- | --------- |
 | Grouping | ThoughtCompletionDetector (hardcoded) | GroupingStrategy abstraction |
-| Detection | Single LLM prompt for thoughts | Dual prompts: gatekeeper + coherence |
+| Detection | Single LLM prompt for thoughts | Triple LLM: voice cue + gatekeeper + coherence |
 | State | Simple accumulated text | Buffer with status (OPEN/PAUSED/DISCARD) |
 | Output | Console display only | Console + persistent memory storage |
+| Voice Cues | None | Async LLM-based intent detection |
 
 ---
 
@@ -68,8 +69,8 @@ Only elegant, complete solutions that fully embody our principles count as succe
   * **Success Criteria**: Can switch strategies via --strategy flag, existing thought detection works
 
 * [ ] **Milestone 2 – Topic Grouping Implementation** ⬜
-  * [ ] **Phase 3 – Core Buffer Management** ⬜ – Implement TopicGroupingStrategy
-  * [ ] **Phase 4 – Voice Cue Detection** ⬜ – Add command recognition
+  * [x] **Phase 3 – Core Buffer Management** ✅ – Implement TopicGroupingStrategy
+  * [x] **Phase 4 – Voice Cue Detection** ✅ – Add command recognition
   * [ ] **Phase 5 – Timing Controls** ⬜ – Idle timer thread
   * **Success Criteria**: Voice cues work, timeouts trigger correctly
 
@@ -151,10 +152,10 @@ class GroupingStrategy:
 #### Phase 3 – Core Buffer Management
 
 * **Implementation Steps**
-  * [ ] Create TopicGroupingStrategy class
-  * [ ] Implement buffer state: {start_ts, last_ts, sentences[], status}
-  * [ ] Add status transitions (OPEN → PAUSED → OPEN)
-  * [ ] Implement basic append logic
+  * [x] Create TopicGroupingStrategy class
+  * [x] Implement buffer state: {start_ts, last_ts, sentences[], status}
+  * [x] Add status transitions (OPEN → PAUSED → OPEN)
+  * [x] Implement basic append logic
 
 * **Test Plan**
   * Test buffer accumulates sentences
@@ -167,19 +168,19 @@ class GroupingStrategy:
 #### Phase 4 – Voice Cue Detection
 
 * **Implementation Steps**
-  * [ ] Add voice cue detection in process_text
-  * [ ] Implement "new note" → flush("store") + start new
-  * [ ] Implement "discard that" → flush("discard")
-  * [ ] Add "pause note" / "resume note" (optional for MVP)
+  * [x] Add voice cue detection in process_text
+  * [x] Implement "new note" → flush("store") + start new
+  * [x] Implement "discard that" → flush("discard")
+  * [x] Add "pause note" / "resume note" (optional for MVP)
 
 * **Test Plan**
-  * Say "new note" and verify flush
-  * Say "discard that" and verify discard
-  * Test cues mid-sentence
+  * [x] Say "new note" and verify flush
+  * [x] Say "discard that" and verify discard
+  * [x] Test cues mid-sentence
 
 * **Success / Acceptance Criteria**
-  * Voice cues trigger correct actions
-  * Buffer resets appropriately
+  * [x] Voice cues trigger correct actions
+  * [x] Buffer resets appropriately
 
 #### Phase 5 – Timing Controls
 
@@ -200,22 +201,33 @@ class GroupingStrategy:
 
 ### Milestone 3 – LLM & Storage
 
-#### Phase 6 – Dual LLM Prompts
+#### Phase 6 – Triple LLM Integration
 
 * **Implementation Steps**
+  * [ ] Create IVoiceCueDetector interface and implementations
+  * [ ] Implement KeywordFilter for cue-related terms
+  * [ ] Create LLMClassifier with structured JSON output
+  * [ ] Add async processing for voice cue detection
+  * [ ] Implement LRU cache with TTL
   * [ ] Create gatekeeper prompt for topic continuity
   * [ ] Create coherence prompt for flush decision
-  * [ ] Add probability thresholds (belongs > 0.6, coherence > 0.4)
-  * [ ] Integrate LLM calls at appropriate points
+  * [ ] Add configurable thresholds (cue_confidence > 0.7, belongs > 0.6, coherence > 0.4)
+  * [ ] Integrate all LLM calls at appropriate points
 
 * **Test Plan**
+  * Test voice cue false positives eliminated
+  * Test natural language variations detected
+  * Test async processing doesn't block
   * Test topic switches detected
   * Test coherent topics stored
   * Test incoherent rambling discarded
 
 * **Success / Acceptance Criteria**
+  * Voice cue detection handles natural language
+  * No false positives from ambiguous phrases
   * Topic continuity detection works
   * Low-quality content discarded
+  * System remains responsive during LLM calls
 
 #### Phase 7 – JSONL Storage
 
