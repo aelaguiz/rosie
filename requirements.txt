@@ -1,0 +1,11 @@
+# Core dependencies
+openai>=1.0.0
+python-dotenv>=1.0.0
+RealtimeSTT>=0.1.0
+
+# Knowledge graph storage
+graphiti-core>=0.1.0
+
+# Optional dependencies for development
+pytest>=7.0.0
+pytest-asyncio>=0.20.0

@@ -6,7 +6,11 @@ Test script for KnowledgeStore abstraction
 import asyncio
 import os
 from datetime import datetime, timezone, timedelta
+from dotenv import load_dotenv
 from knowledge_store import create_knowledge_store, KnowledgeBackend
+
+# Load environment variables
+load_dotenv()
 
 
 async def test_mock_store():

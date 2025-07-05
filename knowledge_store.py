@@ -209,8 +209,8 @@ def create_knowledge_store(backend: Optional[str] = None) -> KnowledgeStore:
     backend_enum = KnowledgeBackend(backend.lower())
     
     if backend_enum == KnowledgeBackend.GRAPHITI:
-        # Import will be added when we implement GraphitiKnowledgeStore
-        raise NotImplementedError("GraphitiKnowledgeStore not yet implemented")
+        from graphiti_store import GraphitiKnowledgeStore
+        return GraphitiKnowledgeStore()
     elif backend_enum == KnowledgeBackend.MOCK:
         from mock_knowledge_store import MockKnowledgeStore
         return MockKnowledgeStore()
