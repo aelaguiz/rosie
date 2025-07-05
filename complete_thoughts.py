@@ -4,11 +4,13 @@
 import os
 import argparse
 import threading
+import asyncio
 import pyaudio
 from datetime import datetime
 from dotenv import load_dotenv
 from RealtimeSTT import AudioToTextRecorder
 from grouping_strategies import create_strategy
+from knowledge_store import create_knowledge_store
 
 # Load environment variables from .env file
 load_dotenv()
@@ -20,6 +22,10 @@ current_status = ""
 # Global accumulator for real-time transcription
 accumulated_text = ""
 accumulated_text_lock = threading.Lock()
+
+# Global knowledge store and event loop
+knowledge_store = None
+event_loop = None
 
 def update_status(message):
     """Update the status line with thread safety"""
@@ -116,8 +122,31 @@ def get_microphone_info(device_index=None):
     finally:
         p.terminate()
 
+async def store_topic_async(text, metadata):
+    """Store completed topic in knowledge store"""
+    global knowledge_store
+    
+    timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    print(f"\n[DEBUG {timestamp}] Storing topic in knowledge store...")
+    
+    # Create entry with all metadata
+    entry = await knowledge_store.add_entry(
+        content=text,
+        timestamp=metadata.get('start_time', datetime.now()),
+        metadata={
+            'duration': metadata.get('duration', 0),
+            'voice_cues': metadata.get('voice_cue_flags', []),
+            'sentence_count': metadata.get('sentence_count', 0),
+            'type': metadata.get('type', 'topic')
+        }
+    )
+    
+    print(f"[DEBUG {timestamp}] Stored as entry {entry.id[:8]}... with {len(entry.extracted_facts)} facts")
+
 def handle_complete_group(strategy, text, metadata):
     """Handle complete group detection via callback"""
+    global knowledge_store, event_loop
+    
     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
     print(f"\n[DEBUG {timestamp}] Complete group callback triggered!")
     print(f"[DEBUG {timestamp}] Group type: {metadata.get('type', 'unknown')}")
@@ -138,8 +167,26 @@ def handle_complete_group(strategy, text, metadata):
         # Generic group display
         print(f"\n📝 Complete {metadata.get('type', 'Group')}: {text}\n")
     
+    # Store in knowledge store
+    if knowledge_store and event_loop:
+        future = asyncio.run_coroutine_threadsafe(
+            store_topic_async(text, metadata),
+            event_loop
+        )
+        # Fire and forget - we don't wait for it
+    
     # Return to listening status
     update_status("🎤 Listening...")
+
+async def init_knowledge_store():
+    """Initialize knowledge store - crashes on failure"""
+    print("Initializing knowledge store...")
+    
+    store = create_knowledge_store()
+    await store.initialize()
+    
+    print("✓ Knowledge store initialized")
+    return store
 
 def main():
     # Parse command line arguments
@@ -167,6 +214,14 @@ def main():
     # Get microphone info
     input_device_index = args.mic  # None means default device
     mic_name, mic_index = get_microphone_info(input_device_index)
+    
+    # Initialize async infrastructure
+    global knowledge_store, event_loop
+    event_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(event_loop)
+    
+    # Initialize knowledge store - this will crash if it fails
+    knowledge_store = event_loop.run_until_complete(init_knowledge_store())
     
     # Initialize the grouping strategy
     print(f"Initializing {args.strategy} grouping strategy...")
@@ -253,6 +308,11 @@ def main():
         print("\nStopping...")
         strategy.stop()
         recorder.stop()
+        
+        # Close knowledge store
+        if knowledge_store:
+            event_loop.run_until_complete(knowledge_store.close())
+        
         print("Goodbye!")
 
 if __name__ == "__main__":
