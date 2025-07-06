@@ -11,6 +11,12 @@ from dotenv import load_dotenv
 from RealtimeSTT import AudioToTextRecorder
 from grouping_strategies import create_strategy
 from knowledge_store import create_knowledge_store
+from banner_utils import print_banner, format_duration, format_facts_count
+from logging_config import setup_logging, get_logger
+
+# Set up logging
+setup_logging()
+logger = get_logger(__name__)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -31,9 +37,9 @@ def update_status(message):
     """Update the status line with thread safety"""
     global current_status
     with status_lock:
-        # DEBUG: Log status change
+        # Log status change
         timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-        print(f"\n[DEBUG {timestamp}] Status change: {current_status} -> {message}")
+        logger.debug(f"Status change: {current_status} -> {message}")
         
         # Clear previous line and show new status
         clear_line = "\r" + " " * 80 + "\r"
@@ -45,15 +51,15 @@ def create_process_text_callback(realtime_model):
     def process_text(text):
         """Callback function that gets called with transcribed text"""
         global accumulated_text
-        # DEBUG: Log callback invocation
+        # Log callback invocation
         timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-        print(f"\n[DEBUG {timestamp}] Real-time transcription: '{text}' (len={len(text)}) [model: {realtime_model}]")
+        logger.debug(f"Real-time transcription: '{text}' (len={len(text)}) [model: {realtime_model}]")
         
         # Capture the accumulated text
         if text.strip():  # Only update if there's actual text
             with accumulated_text_lock:
                 accumulated_text = text
-                print(f"[DEBUG {timestamp}] Captured accumulated_text: '{accumulated_text[:50]}...' (len={len(accumulated_text)})")
+                logger.debug(f"Captured accumulated_text: '{accumulated_text[:50]}...' (len={len(accumulated_text)})")
             update_status("🔊 Transcribing...")
     
     return process_text
@@ -62,19 +68,19 @@ def on_recording_start():
     """Called when recording starts"""
     global accumulated_text
     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-    print(f"\n[DEBUG {timestamp}] on_recording_start called")
+    logger.debug("on_recording_start called")
     
     # Reset accumulated text for new recording
     with accumulated_text_lock:
         accumulated_text = ""
-        print(f"[DEBUG {timestamp}] Reset accumulated_text")
+        logger.debug("Reset accumulated_text")
     
     update_status("🔴 Recording...")
 
 def on_recording_stop():
     """Called when recording stops"""
     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-    print(f"\n[DEBUG {timestamp}] on_recording_stop called")
+    logger.debug("on_recording_stop called")
     update_status("🤔 Analyzing...")
 
 def list_microphones():
@@ -127,12 +133,20 @@ async def store_topic_async(text, metadata):
     global knowledge_store
     
     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-    print(f"\n[DEBUG {timestamp}] Storing topic in knowledge store...")
+    logger.debug("store_topic_async called")
+    logger.debug("Storing topic in knowledge store...")
     
     # Create entry with all metadata
+    # Convert string timestamp to datetime if needed
+    start_time = metadata.get('start_ts')
+    if isinstance(start_time, str):
+        start_time = datetime.fromisoformat(start_time)
+    elif start_time is None:
+        start_time = datetime.now()
+    
     entry = await knowledge_store.add_entry(
         content=text,
-        timestamp=metadata.get('start_time', datetime.now()),
+        timestamp=start_time,
         metadata={
             'duration': metadata.get('duration', 0),
             'voice_cues': metadata.get('voice_cue_flags', []),
@@ -141,51 +155,85 @@ async def store_topic_async(text, metadata):
         }
     )
     
-    print(f"[DEBUG {timestamp}] Stored as entry {entry.id[:8]}... with {len(entry.extracted_facts)} facts")
+    logger.debug(f"Stored as entry {entry.id[:8]}... with {len(entry.extracted_facts)} facts")
+    
+    # Show knowledge base save banner
+    kb_metadata = {
+        'ID': entry.id[:8] + '...',
+        'Duration': format_duration(metadata.get('duration', 0)),
+        'Facts': format_facts_count(len(entry.extracted_facts))
+    }
+    
+    # Add voice cues if any were used
+    if metadata.get('voice_cue_flags'):
+        kb_metadata['Commands'] = ', '.join(metadata['voice_cue_flags'])
+    
+    print_banner(
+        title="Saved to Knowledge Base",
+        content=text[:80] + ("..." if len(text) > 80 else ""),
+        emoji="💾",
+        metadata=kb_metadata
+    )
 
 def handle_complete_group(strategy, text, metadata):
     """Handle complete group detection via callback"""
     global knowledge_store, event_loop
     
     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-    print(f"\n[DEBUG {timestamp}] Complete group callback triggered!")
-    print(f"[DEBUG {timestamp}] Group type: {metadata.get('type', 'unknown')}")
-    print(f"[DEBUG {timestamp}] Text: '{text}'")
-    print(f"[DEBUG {timestamp}] Metadata: {metadata}")
+    logger.debug("Complete group callback triggered!")
+    logger.debug(f"Group type: {metadata.get('type', 'unknown')}")
+    logger.debug(f"Text: '{text}'")
+    logger.debug(f"Metadata: {metadata}")
     
-    # Clear the status line completely
-    print("\r" + " " * 80 + "\r", end='', flush=True)
+    # Show the complete group using banner
+    group_type = metadata.get('type', 'Group')
     
-    # Show the complete group based on type
-    if metadata.get('type') == 'thought':
-        # Use thought-specific formatting if available
-        if hasattr(strategy, 'format_complete_thought'):
-            print(strategy.format_complete_thought(text))
-        else:
-            print(f"\n💭 Complete Thought: {text}\n")
-    else:
-        # Generic group display
-        print(f"\n📝 Complete {metadata.get('type', 'Group')}: {text}\n")
+    # Build metadata for display
+    display_metadata = {}
+    if metadata.get('duration'):
+        display_metadata['Duration'] = format_duration(metadata['duration'])
+    if metadata.get('sentence_count'):
+        display_metadata['Sentences'] = metadata['sentence_count']
+    
+    # Choose emoji based on type
+    emoji = "💭" if group_type == 'thought' else "📝"
+    
+    print_banner(
+        title=f"Complete {group_type.capitalize()}",
+        content=text,
+        emoji=emoji,
+        metadata=display_metadata if display_metadata else None
+    )
     
     # Store in knowledge store
     if knowledge_store and event_loop:
-        future = asyncio.run_coroutine_threadsafe(
-            store_topic_async(text, metadata),
-            event_loop
-        )
-        # Fire and forget - we don't wait for it
+        logger.debug("Scheduling knowledge store save...")
+        try:
+            future = asyncio.run_coroutine_threadsafe(
+                store_topic_async(text, metadata),
+                event_loop
+            )
+            logger.debug("Storage task scheduled")
+            # Fire and forget - we don't wait for it
+        except Exception as e:
+            logger.error(f"Failed to schedule storage: {e}")
+    else:
+        logger.warning(f"Cannot store - knowledge_store: {knowledge_store}, event_loop: {event_loop}")
     
     # Return to listening status
     update_status("🎤 Listening...")
 
 async def init_knowledge_store():
     """Initialize knowledge store - crashes on failure"""
-    print("Initializing knowledge store...")
+    logger.debug("Initializing knowledge store...")
+    logger.debug(f"Knowledge backend: {os.getenv('KNOWLEDGE_BACKEND', 'graphiti')}")
     
     store = create_knowledge_store()
+    logger.debug("Created store instance, initializing...")
+    
     await store.initialize()
     
-    print("✓ Knowledge store initialized")
+    logger.info("✓ Knowledge store initialized successfully")
     return store
 
 def main():
@@ -193,11 +241,11 @@ def main():
     parser = argparse.ArgumentParser(description='Complete thoughts speech-to-text with thought detection')
     parser.add_argument('--list', action='store_true', help='List all available microphones')
     parser.add_argument('--mic', type=int, help='Microphone device index to use')
-    parser.add_argument('--model', type=str, default=os.getenv('WHISPER_MODEL', 'tiny'), 
+    parser.add_argument('--model', type=str, default=os.getenv('WHISPER_MODEL', 'base'), 
                         help='Whisper model for final transcription (tiny, base, small, medium, large-v1, large-v2, large-v3)')
     parser.add_argument('--realtime-model', type=str, default=os.getenv('WHISPER_REALTIME_MODEL'),
                         help='Whisper model for realtime transcription (defaults to same as --model)')
-    parser.add_argument('--strategy', type=str, default='thought',
+    parser.add_argument('--strategy', type=str, default='topic',
                         choices=['thought', 'topic'],
                         help='Grouping strategy to use (thought or topic)')
     args = parser.parse_args()
@@ -217,15 +265,33 @@ def main():
     
     # Initialize async infrastructure
     global knowledge_store, event_loop
+    logger.debug("Setting up async infrastructure...")
     event_loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(event_loop)
+    logger.debug(f"Event loop created: {event_loop}")
+    
+    # Run event loop in a separate thread
+    def run_event_loop():
+        asyncio.set_event_loop(event_loop)
+        logger.debug(f"Event loop running in thread: {threading.current_thread().name}")
+        event_loop.run_forever()
+        logger.debug("Event loop stopped")
+    
+    loop_thread = threading.Thread(target=run_event_loop, daemon=True, name="EventLoopThread")
+    loop_thread.start()
+    logger.debug("Event loop thread started")
     
     # Initialize knowledge store - this will crash if it fails
-    knowledge_store = event_loop.run_until_complete(init_knowledge_store())
+    try:
+        future = asyncio.run_coroutine_threadsafe(init_knowledge_store(), event_loop)
+        knowledge_store = future.result()  # This blocks until init completes
+        logger.debug(f"Knowledge store initialized: {knowledge_store}")
+    except Exception as e:
+        logger.error(f"Failed to initialize knowledge store: {e}")
+        raise
     
     # Initialize the grouping strategy
-    print(f"Initializing {args.strategy} grouping strategy...")
-    print(f"[DEBUG] Setting {args.strategy} strategy debug=True")
+    logger.info(f"Initializing {args.strategy} grouping strategy...")
+    logger.debug(f"Setting {args.strategy} strategy debug=True")
     
     # Create strategy with callback
     strategy = create_strategy(
@@ -235,21 +301,21 @@ def main():
     )
     
     # Initialize the recorder
-    print("Initializing speech-to-text...")
-    print(f"Using microphone: {mic_name} (device #{mic_index})")
-    print(f"Using Whisper model: {args.model} (realtime: {args.realtime_model})")
+    logger.info("Initializing speech-to-text...")
+    logger.info(f"Using microphone: {mic_name} (device #{mic_index})")
+    logger.info(f"Using Whisper model: {args.model} (realtime: {args.realtime_model})")
     print("-" * 50)
     
     # Create the callback for real-time status updates
     process_text = create_process_text_callback(args.realtime_model)
     
-    print("\n[DEBUG] Creating AudioToTextRecorder with:")
-    print(f"  - model: {args.model}")
-    print(f"  - realtime_model_type: {args.realtime_model}")
-    print("  - enable_realtime_transcription: True")
-    print("  - on_realtime_transcription_update: process_text callback")
-    print("  - silero_sensitivity: 0.4")
-    print("  - post_speech_silence_duration: 0.7")
+    logger.debug("Creating AudioToTextRecorder with:")
+    logger.debug(f"  - model: {args.model}")
+    logger.debug(f"  - realtime_model_type: {args.realtime_model}")
+    logger.debug("  - enable_realtime_transcription: True")
+    logger.debug("  - on_realtime_transcription_update: process_text callback")
+    logger.debug("  - silero_sensitivity: 0.4")
+    logger.debug("  - post_speech_silence_duration: 0.7")
     
     recorder = AudioToTextRecorder(
         spinner=False,
@@ -275,7 +341,7 @@ def main():
     print("-" * 50)
     
     # Set initial status
-    print("\n[DEBUG] Setting initial status...")
+    logger.debug("Setting initial status...")
     update_status("🎤 Listening...")
     
     try:
@@ -285,9 +351,9 @@ def main():
             
             # This will continuously listen and transcribe
             timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-            print(f"\n[DEBUG {timestamp}] Calling recorder.text() - waiting for speech... [model: {args.model}]")
+            logger.debug(f"Calling recorder.text() - waiting for speech... [model: {args.model}]")
             result = recorder.text()
-            print(f"[DEBUG {timestamp}] recorder.text() returned: '{result}' [model: {args.model}]")
+            logger.debug(f"recorder.text() returned: '{result}' [model: {args.model}]")
             
             # Use accumulated text instead of final transcription
             with accumulated_text_lock:
@@ -295,12 +361,12 @@ def main():
             
             if text_to_process and text_to_process.strip():
                 update_status("🤔 Analyzing accumulated transcription...")
-                print(f"[DEBUG {timestamp}] Using accumulated_text: '{text_to_process}' (len={len(text_to_process)})")
-                print(f"[DEBUG {timestamp}] Ignoring recorder.text() result: '{result}'")
+                logger.debug(f"Using accumulated_text: '{text_to_process}' (len={len(text_to_process)})")
+                logger.debug(f"Ignoring recorder.text() result: '{result}'")
                 
                 # Send accumulated text to grouping strategy
                 strategy.process_text(text_to_process, datetime.now())
-                print(f"[DEBUG {timestamp}] Sent accumulated text to {args.strategy} strategy for processing")
+                logger.debug(f"Sent accumulated text to {args.strategy} strategy for processing")
                 # If it was a complete thought, the callback already handled it
     except KeyboardInterrupt:
         # Clear status line before exit messages
@@ -310,8 +376,14 @@ def main():
         recorder.stop()
         
         # Close knowledge store
-        if knowledge_store:
-            event_loop.run_until_complete(knowledge_store.close())
+        if knowledge_store and event_loop:
+            logger.info("Closing knowledge store...")
+            future = asyncio.run_coroutine_threadsafe(knowledge_store.close(), event_loop)
+            future.result(timeout=5)  # Wait up to 5 seconds
+            
+            # Stop the event loop
+            event_loop.call_soon_threadsafe(event_loop.stop)
+            logger.debug("Event loop stopped")
         
         print("Goodbye!")
 

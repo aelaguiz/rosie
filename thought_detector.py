@@ -17,12 +17,16 @@ from litellm import completion
 from colorama import init, Fore, Style
 from dotenv import load_dotenv
 import string
+from logging_config import get_logger
 
 # Load environment variables from .env file
 load_dotenv()
 
 # Initialize colorama for cross-platform color support
 init()
+
+# Set up logging
+logger = get_logger(__name__)
 
 # Configure litellm
 litellm.drop_params = True
@@ -85,8 +89,7 @@ class ThoughtCompletionDetector:
         self.running = True
         self.executor = ThreadPoolExecutor(max_workers=self.max_workers, thread_name_prefix='thought-detector')
         
-        if self.debug:
-            print(f"Started ThreadPoolExecutor with {self.max_workers} workers")
+        logger.debug(f"Started ThreadPoolExecutor with {self.max_workers} workers")
             
     def _analyze_text(self, text: str) -> Optional[ThoughtAnalysis]:
         """Analyze text for thought completion using LLM"""
@@ -157,14 +160,12 @@ You MUST respond with a JSON object containing exactly these fields:
             # Parse the response
             result = ThoughtAnalysis.model_validate_json(response.choices[0].message.content)
             
-            if self.debug:
-                print(f"\nAnalysis for '{text}': {result.is_complete} (confidence: {result.confidence})")
+            logger.debug(f"Analysis for '{text}': {result.is_complete} (confidence: {result.confidence})")
                 
             return result
             
         except Exception as e:
-            if self.debug:
-                print(f"Analysis error: {e}")
+            logger.error(f"Analysis error: {e}")
             return None
             
     def _process_future_result(self, future: Future, text: str):
@@ -184,8 +185,7 @@ You MUST respond with a JSON object containing exactly these fields:
             self._notify_thought_complete()
             
         except Exception as e:
-            if self.debug:
-                print(f"Future processing error for '{text}': {e}")
+            logger.error(f"Future processing error for '{text}': {e}")
             self.result_queue.put((text, None))
         finally:
             # Clean up future tracking
@@ -204,16 +204,14 @@ You MUST respond with a JSON object containing exactly these fields:
             
     def _on_pause_detected(self):
         """Called when pause threshold is reached"""
-        if self.debug:
-            print(f"[DEBUG] {self.min_pause_before_analysis}s pause detected, submitting for analysis: '{self.pending_analysis_text}'")
+        logger.debug(f"{self.min_pause_before_analysis}s pause detected, submitting for analysis: '{self.pending_analysis_text}'")
         
         # Submit for analysis
         if self.pending_analysis_text and len(self.pending_analysis_text.strip()) >= 3:
             # Check for backpressure
             with self.futures_lock:
                 if len(self.pending_futures) >= self.max_workers:
-                    if self.debug:
-                        print(f"Skipping analysis: worker pool is full ({self.max_workers} pending tasks)")
+                    logger.warning(f"Skipping analysis: worker pool is full ({self.max_workers} pending tasks)")
                     return
             
             # Submit analysis task
@@ -226,8 +224,7 @@ You MUST respond with a JSON object containing exactly these fields:
             # Set up callback
             future.add_done_callback(lambda f, t=self.pending_analysis_text: self._process_future_result(f, t))
             
-            if self.debug:
-                print(f"Submitted analysis for '{self.pending_analysis_text}' (active tasks: {len(self.pending_futures)})")
+            logger.debug(f"Submitted analysis for '{self.pending_analysis_text}' (active tasks: {len(self.pending_futures)})")
                 
     def _notify_thought_complete(self):
         """Check result queue and notify callback if complete thought found"""
@@ -258,8 +255,7 @@ You MUST respond with a JSON object containing exactly these fields:
                 
     def _on_auto_complete_timeout(self):
         """Called when auto-complete timeout is reached"""
-        if self.debug:
-            print(f"[DEBUG] {self.auto_complete_timeout}s timeout reached, auto-completing thought: '{self.accumulated_partial}'")
+        logger.debug(f"{self.auto_complete_timeout}s timeout reached, auto-completing thought: '{self.accumulated_partial}'")
         
         # Auto-complete the current text without LLM
         if self.accumulated_partial:
@@ -294,8 +290,7 @@ You MUST respond with a JSON object containing exactly these fields:
         self.last_text_update_time = current_time
         self.pending_analysis_text = new_text
         
-        if self.debug:
-            print(f"[DEBUG] Text updated, resetting timers: '{new_text}'")
+        logger.debug(f"Text updated, resetting timers: '{new_text}'")
         
         # Only set up timers if we have meaningful text
         if len(new_text.strip()) >= 3:
@@ -406,5 +401,4 @@ You MUST respond with a JSON object containing exactly these fields:
             # Shutdown executor
             self.executor.shutdown(wait=True, cancel_futures=True)
             
-            if self.debug:
-                print("ThreadPoolExecutor shutdown complete")
+            logger.debug("ThreadPoolExecutor shutdown complete")

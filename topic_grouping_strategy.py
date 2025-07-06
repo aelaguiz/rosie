@@ -16,12 +16,16 @@ from openai import OpenAI
 from colorama import init, Fore, Style, Back
 from grouping_strategies import GroupingStrategy
 from voice_command_prompts import SYSTEM_PROMPT_TOOLS, TOOLS
+from logging_config import get_logger
 
 # Load environment variables
 load_dotenv()
 
 # Initialize colorama for cross-platform color support
 init()
+
+# Set up logging
+logger = get_logger(__name__)
 
 
 class TopicGroupingStrategy(GroupingStrategy):
@@ -32,7 +36,7 @@ class TopicGroupingStrategy(GroupingStrategy):
                  debug: bool = False,
                  # Timing parameters (will be used in Phase 5)
                  short_gap: float = 0.5,
-                 max_gap: float = 90.0,
+                 max_gap: float = 3.0,
                  max_lifetime: float = 300.0):  # 5 minutes
         """
         Initialize topic grouping strategy.
@@ -75,17 +79,14 @@ class TopicGroupingStrategy(GroupingStrategy):
         if api_key:
             try:
                 self._openai_client = OpenAI(api_key=api_key)
-                if self.debug:
-                    print("[TopicGroupingStrategy] OpenAI client initialized")
+                logger.debug("[TopicGroupingStrategy] OpenAI client initialized")
             except Exception as e:
-                print(f"[TopicGroupingStrategy] Warning: Failed to initialize OpenAI client: {e}")
-                print("[TopicGroupingStrategy] Falling back to string matching for voice commands")
+                logger.warning(f"[TopicGroupingStrategy] Warning: Failed to initialize OpenAI client: {e}")
+                logger.info("[TopicGroupingStrategy] Falling back to string matching for voice commands")
         else:
-            if self.debug:
-                print("[TopicGroupingStrategy] No OpenAI API key found, using string matching only")
+            logger.warning("[TopicGroupingStrategy] No OpenAI API key found, using string matching only")
         
-        if self.debug:
-            print(f"[TopicGroupingStrategy] Initialized with timing: short_gap={short_gap}s, max_gap={max_gap}s, max_lifetime={max_lifetime}s")
+        logger.debug(f"[TopicGroupingStrategy] Initialized with timing: short_gap={short_gap}s, max_gap={max_gap}s, max_lifetime={max_lifetime}s")
         
         # Start the timer thread
         self._start_timer_thread()
@@ -152,8 +153,7 @@ class TopicGroupingStrategy(GroupingStrategy):
         
         with self._lock:
             if voice_cue:
-                if self.debug:
-                    print(f"[TopicGroupingStrategy] Detected voice cue: {voice_cue}")
+                logger.debug(f"[TopicGroupingStrategy] Detected voice cue: {voice_cue}")
                 
                 if voice_cue == "new_note":
                     # Flush current buffer (if any) and start new
@@ -172,14 +172,12 @@ class TopicGroupingStrategy(GroupingStrategy):
                 
                 elif voice_cue == "pause":
                     self.status = "PAUSED"
-                    if self.debug:
-                        print("[TopicGroupingStrategy] Topic paused")
+                    logger.debug("[TopicGroupingStrategy] Topic paused")
                     return
                 
                 elif voice_cue == "resume":
                     self.status = "OPEN"
-                    if self.debug:
-                        print("[TopicGroupingStrategy] Topic resumed")
+                    logger.debug("[TopicGroupingStrategy] Topic resumed")
                     return
                 
                 elif voice_cue == "flush":
@@ -191,15 +189,13 @@ class TopicGroupingStrategy(GroupingStrategy):
             
             # Don't process text if paused
             if self.status == "PAUSED":
-                if self.debug:
-                    print("[TopicGroupingStrategy] Ignoring text - topic is paused")
+                logger.debug("[TopicGroupingStrategy] Ignoring text - topic is paused")
                 return
             
             # Initialize timestamps on first text
             if self.start_ts is None:
                 self.start_ts = current_time
-                if self.debug:
-                    print(f"[TopicGroupingStrategy] Starting new topic at {self.start_ts.strftime('%H:%M:%S')}")
+                logger.debug(f"[TopicGroupingStrategy] Starting new topic at {self.start_ts.strftime('%H:%M:%S')}")
             
             self.last_ts = current_time
             
@@ -207,10 +203,9 @@ class TopicGroupingStrategy(GroupingStrategy):
             new_sentences = self._split_into_sentences(text)
             if new_sentences:
                 self.sentences.extend(new_sentences)
-                if self.debug:
-                    print(f"[TopicGroupingStrategy] Added {len(new_sentences)} sentences, total: {len(self.sentences)}")
-                    for s in new_sentences:
-                        print(f"  - {s}")
+                logger.debug(f"[TopicGroupingStrategy] Added {len(new_sentences)} sentences, total: {len(self.sentences)}")
+                for s in new_sentences:
+                    logger.debug(f"  - {s}")
     
     def get_status(self) -> str:
         """
@@ -235,7 +230,7 @@ class TopicGroupingStrategy(GroupingStrategy):
         with self._lock:
             if not self.sentences:
                 if self.debug:
-                    print("[TopicGroupingStrategy] Flush called but no sentences to flush")
+                    logger.debug("[TopicGroupingStrategy] Flush called but no sentences to flush")
                 return None
             
             # Join sentences into complete text
@@ -253,8 +248,8 @@ class TopicGroupingStrategy(GroupingStrategy):
                 }
                 
                 if self.debug:
-                    print(f"[TopicGroupingStrategy] Flushing topic with {len(self.sentences)} sentences")
-                    print(f"  Duration: {(self.last_ts - self.start_ts).total_seconds():.1f}s")
+                    logger.debug(f"[TopicGroupingStrategy] Flushing topic with {len(self.sentences)} sentences")
+                    logger.debug(f"  Duration: {(self.last_ts - self.start_ts).total_seconds():.1f}s")
                 
                 # Call the callback
                 self.on_group_complete(full_text, metadata)
@@ -264,8 +259,7 @@ class TopicGroupingStrategy(GroupingStrategy):
                 return full_text
             
             elif action == "discard":
-                if self.debug:
-                    print(f"[TopicGroupingStrategy] Discarding {len(self.sentences)} sentences")
+                logger.debug(f"[TopicGroupingStrategy] Discarding {len(self.sentences)} sentences")
                 
                 # Reset buffer
                 self._reset_buffer()
@@ -368,9 +362,8 @@ class TopicGroupingStrategy(GroupingStrategy):
             return commands
             
         except Exception as e:
-            if self.debug:
-                print(f"[TopicGroupingStrategy] Error calling GPT-4o: {e}")
-                print("[TopicGroupingStrategy] Falling back to legacy string matching")
+            logger.warning(f"[TopicGroupingStrategy] Error calling GPT-4o: {e}")
+            logger.debug("[TopicGroupingStrategy] Falling back to legacy string matching")
             
             # Fallback to legacy detection
             legacy_cue = self._detect_voice_cue_legacy(self._accumulated_text)
@@ -421,21 +414,18 @@ class TopicGroupingStrategy(GroupingStrategy):
         if self._timer_thread is None or not self._timer_thread.is_alive():
             self._timer_thread = threading.Thread(target=self._timer_worker, daemon=False)
             self._timer_thread.start()
-            if self.debug:
-                print("[TopicGroupingStrategy] Timer thread started")
+            logger.debug("[TopicGroupingStrategy] Timer thread started")
     
     def _stop_timer_thread(self):
         """Stop the background timer thread."""
         if self._timer_thread and self._timer_thread.is_alive():
             self._stop_timer.set()
             self._timer_thread.join(timeout=2.0)
-            if self.debug:
-                print("[TopicGroupingStrategy] Timer thread stopped")
+            logger.debug("[TopicGroupingStrategy] Timer thread stopped")
     
     def _timer_worker(self):
         """Background thread that checks for timeouts."""
-        if self.debug:
-            print("[TopicGroupingStrategy] Timer worker started")
+        logger.debug("[TopicGroupingStrategy] Timer worker started")
         
         while not self._stop_timer.is_set():
             # Wait for 1 second or until stop is signaled
@@ -471,8 +461,7 @@ class TopicGroupingStrategy(GroupingStrategy):
                 if self.last_ts:
                     gap = (current_time - self.last_ts).total_seconds()
                     if gap > self.max_gap:
-                        if self.debug:
-                            print(f"[TopicGroupingStrategy] Max gap exceeded: {gap:.1f}s > {self.max_gap}s")
+                        logger.debug(f"[TopicGroupingStrategy] Max gap exceeded: {gap:.1f}s > {self.max_gap}s")
                         self.voice_cue_flags.append("max_gap_exceeded")
                         self.flush("store")
                         continue
@@ -481,19 +470,16 @@ class TopicGroupingStrategy(GroupingStrategy):
                 if self.start_ts:
                     lifetime = (current_time - self.start_ts).total_seconds()
                     if lifetime > self.max_lifetime:
-                        if self.debug:
-                            print(f"[TopicGroupingStrategy] Max lifetime exceeded: {lifetime:.1f}s > {self.max_lifetime}s")
+                        logger.debug(f"[TopicGroupingStrategy] Max lifetime exceeded: {lifetime:.1f}s > {self.max_lifetime}s")
                         self.voice_cue_flags.append("max_lifetime_exceeded")
                         self.flush("store")
                         continue
         
-        if self.debug:
-            print("[TopicGroupingStrategy] Timer worker stopped")
+        logger.debug("[TopicGroupingStrategy] Timer worker stopped")
     
     def stop(self) -> None:
         """Stop any background threads or cleanup resources."""
-        if self.debug:
-            print("[TopicGroupingStrategy] Stopping strategy")
+        logger.debug("[TopicGroupingStrategy] Stopping strategy")
         
         # Stop the timer thread
         self._stop_timer_thread()
