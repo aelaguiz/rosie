@@ -53,6 +53,7 @@ class TopicGroupingStrategy(GroupingStrategy):
         # Buffer state
         self.start_ts: Optional[datetime] = None
         self.last_ts: Optional[datetime] = None
+        self.last_speech_end_ts: Optional[datetime] = None  # When speech actually stopped
         self.sentences: List[str] = []
         self.status = "OPEN"
         self.voice_cue_flags: List[str] = []
@@ -216,6 +217,18 @@ class TopicGroupingStrategy(GroupingStrategy):
         """
         with self._lock:
             return self.status
+    
+    def mark_speech_end(self, timestamp: Optional[datetime] = None) -> None:
+        """
+        Mark when speech actually ended (not when processing finished).
+        This is used for accurate gap timing.
+        
+        Args:
+            timestamp: When speech ended (defaults to now)
+        """
+        with self._lock:
+            self.last_speech_end_ts = timestamp or datetime.now()
+            logger.debug(f"[TopicGroupingStrategy] Speech ended at {self.last_speech_end_ts.strftime('%H:%M:%S.%f')[:-3]}")
     
     def flush(self, action: str = "store") -> Optional[str]:
         """
@@ -381,6 +394,7 @@ class TopicGroupingStrategy(GroupingStrategy):
         self.sentences = []
         self.start_ts = None
         self.last_ts = None
+        self.last_speech_end_ts = None
         self.status = "OPEN"
         self.voice_cue_flags = []
     
@@ -457,9 +471,10 @@ class TopicGroupingStrategy(GroupingStrategy):
                 if not self.sentences or self.status == "PAUSED":
                     continue
                 
-                # Check max gap timeout
-                if self.last_ts:
-                    gap = (current_time - self.last_ts).total_seconds()
+                # Check max gap timeout (use speech end time if available)
+                gap_reference_time = self.last_speech_end_ts or self.last_ts
+                if gap_reference_time:
+                    gap = (current_time - gap_reference_time).total_seconds()
                     if gap > self.max_gap:
                         logger.debug(f"[TopicGroupingStrategy] Max gap exceeded: {gap:.1f}s > {self.max_gap}s")
                         self.voice_cue_flags.append("max_gap_exceeded")

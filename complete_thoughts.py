@@ -29,9 +29,10 @@ current_status = ""
 accumulated_text = ""
 accumulated_text_lock = threading.Lock()
 
-# Global knowledge store and event loop
+# Global knowledge store, event loop, and strategy
 knowledge_store = None
 event_loop = None
+strategy = None
 
 def update_status(message):
     """Update the status line with thread safety"""
@@ -79,8 +80,14 @@ def on_recording_start():
 
 def on_recording_stop():
     """Called when recording stops"""
+    global strategy
     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
     logger.debug("on_recording_stop called")
+    
+    # Mark speech end for accurate gap timing
+    if strategy:
+        strategy.mark_speech_end()
+    
     update_status("🤔 Analyzing...")
 
 def list_microphones():
@@ -264,7 +271,7 @@ def main():
     mic_name, mic_index = get_microphone_info(input_device_index)
     
     # Initialize async infrastructure
-    global knowledge_store, event_loop
+    global knowledge_store, event_loop, strategy
     logger.debug("Setting up async infrastructure...")
     event_loop = asyncio.new_event_loop()
     logger.debug(f"Event loop created: {event_loop}")
